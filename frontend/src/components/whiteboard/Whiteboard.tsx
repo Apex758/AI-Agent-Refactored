@@ -10,7 +10,7 @@ interface WhiteboardProps {
 }
 
 export default function Whiteboard({ chatId }: WhiteboardProps) {
-  const { setEditor, saveSnapshot, loadSnapshot } = useWhiteboardStore()
+  const { setEditor, saveSnapshot, loadSnapshot, clearPlacedMedia } = useWhiteboardStore()
   const editorRef = useRef<Editor | null>(null)
   const prevChatIdRef = useRef<string>(chatId)
 
@@ -30,6 +30,8 @@ export default function Whiteboard({ chatId }: WhiteboardProps) {
     if (prevChatIdRef.current !== chatId && editorRef.current) {
       // Save old
       saveSnapshot(prevChatIdRef.current)
+      // Clear placed media tracking for new chat
+      clearPlacedMedia()
       // Clear and load new
       const editor = editorRef.current
       // Delete all shapes on current page before loading new snapshot
@@ -40,7 +42,7 @@ export default function Whiteboard({ chatId }: WhiteboardProps) {
       loadSnapshot(chatId)
       prevChatIdRef.current = chatId
     }
-  }, [chatId, saveSnapshot, loadSnapshot])
+  }, [chatId, saveSnapshot, loadSnapshot, clearPlacedMedia])
 
   // Auto-save on unmount
   useEffect(() => {

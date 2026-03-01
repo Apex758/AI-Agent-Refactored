@@ -188,6 +188,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   },
 
   addScrapedMedia: (images: string[], videos: string[]) => {
+    console.log('[DEBUG addScrapedMedia] Called with:', { images, videos })
     const { currentChatId, messagesByChatId } = get()
     if (!currentChatId) return
     if (images.length === 0 && videos.length === 0) return

@@ -39,6 +39,7 @@ export function useWebSocket(clientId: string) {
             setError(msg.content)
             break
           case 'media':
+            console.log('[DEBUG WS] Received media event:', { images: msg.images, videos: msg.videos })
             addScrapedMedia(msg.images ?? [], msg.videos ?? [])
             break
         }

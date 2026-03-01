@@ -386,8 +386,10 @@ export default function Home() {
   // ── Auto-place scraped media on the whiteboard ─────────────────
   useEffect(() => {
     const last = currentMessages[currentMessages.length - 1]
+    console.log('[DEBUG] Checking for scraped media:', { lastRole: last?.role, hasMedia: !!last?.media, media: last?.media })
     if (last?.role === 'system' && last.media) {
       const { images = [], videos = [] } = last.media
+      console.log('[DEBUG] Found media - images:', images.length, 'videos:', videos.length)
       if (images.length > 0 || videos.length > 0) {
         placeScrapedMedia(images, videos)
       }

@@ -14,11 +14,14 @@ interface WhiteboardStore {
   exportAsImage: () => Promise<Blob | null>
   presentOnBoard: (scenePlan: ScenePlan) => void
   placeScrapedMedia: (images: string[], videoIds: string[]) => void
+  placedMediaIds: string[]  // Track already-placed media to avoid duplicates
+  clearPlacedMedia: () => void
 }
 
 export const useWhiteboardStore = create<WhiteboardStore>((set, get) => ({
   snapshots: {},
   editorRef: null,
+  placedMediaIds: [],
 
   setEditor: (editor) => set({ editorRef: editor }),
 
@@ -174,9 +177,24 @@ export const useWhiteboardStore = create<WhiteboardStore>((set, get) => ({
   },
 
   placeScrapedMedia: (images: string[], videoIds: string[]) => {
-    const { editorRef } = get()
-    if (!editorRef) return
+    const { editorRef, placedMediaIds } = get()
+    console.log('[DEBUG placeScrapedMedia] editorRef:', !!editorRef, 'images:', images.length, 'videos:', videoIds.length)
+    if (!editorRef) {
+      console.log('[DEBUG placeScrapedMedia] No editorRef!')
+      return
+    }
     if (images.length === 0 && videoIds.length === 0) return
+
+    // Generate a unique ID for this media batch to prevent duplicates
+    const mediaId = `media-${images.join(',')}-${videoIds.join(',')}`
+    if (placedMediaIds.includes(mediaId)) {
+      console.log('[DEBUG placeScrapedMedia] Already placed, skipping')
+      return
+    }
+    
+    // Mark this media as placed
+    set(s => ({ placedMediaIds: [...s.placedMediaIds, mediaId] }))
+    console.log('[DEBUG placeScrapedMedia] Placing media now...')
 
     const viewportBounds = editorRef.getViewportScreenBounds()
     const topLeft = editorRef.screenToPage({ x: viewportBounds.x, y: viewportBounds.y })
@@ -239,4 +257,6 @@ export const useWhiteboardStore = create<WhiteboardStore>((set, get) => ({
       })
     })
   },
+
+  clearPlacedMedia: () => set({ placedMediaIds: [] }),
 }))

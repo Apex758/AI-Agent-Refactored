@@ -6,6 +6,24 @@
 
 ## Important Facts
 
+- User requested another funny video, prefers funny kids fails compilations
+
+
+- User requests additional similar video recommendations
+
+
+- User enjoys funny kid fails and family moments videos
+
+
+- User likes funny videos
+
+
+- User requests more such videos
+
+
+- User is interested in Funny Kids Fails Compilations
+
+
 - User likes Funny Kids Fails Compilation videos
 
 
