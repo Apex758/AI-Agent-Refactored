@@ -10,16 +10,13 @@ import type { UIMode } from '@/components/whiteboard/types'
 
 interface CenterStageProps {
   chatId: string | null
-  /** The existing chat UI (messages + input) rendered as children */
   children: ReactNode
-  /** Header content (left side — sidebar toggle + chat name) */
   headerLeft: ReactNode
-  /** Header content (right side — memory, clear, doc toggle) */
   headerRight: ReactNode
-  /** Voice hook instance from parent */
   voice: UseVoiceReturn
   isProcessing: boolean
   onMicClick: () => void
+  onAfterSnapshot?: () => void  // FIX 1: passed down to WhiteboardLayer
 }
 
 function ModeToggle({ mode, setMode }: { mode: UIMode; setMode: (m: UIMode) => void }) {
@@ -56,12 +53,12 @@ export default function CenterStage({
   voice,
   isProcessing,
   onMicClick,
+  onAfterSnapshot,
 }: CenterStageProps) {
   const { mode, setMode } = useUIStore()
   const { saveSnapshot } = useWhiteboardStore()
 
   const handleSetMode = (newMode: UIMode) => {
-    // Save whiteboard state when leaving whiteboard
     if (mode === 'whiteboard' && newMode === 'chat' && chatId) {
       saveSnapshot(chatId)
     }
@@ -70,13 +67,12 @@ export default function CenterStage({
 
   return (
     <div className="h-full flex flex-col min-w-0 relative">
-      {/* ── Header ── */}
+      {/* Header */}
       <header className="chat-header flex items-center justify-between px-5 py-3 flex-shrink-0 z-10">
         <div className="flex items-center gap-3">
           {headerLeft}
         </div>
 
-        {/* Center: Mode toggle */}
         {chatId && <ModeToggle mode={mode} setMode={handleSetMode} />}
 
         <div className="flex gap-2 items-center">
@@ -84,9 +80,9 @@ export default function CenterStage({
         </div>
       </header>
 
-      {/* ── Stacked layers ── */}
+      {/* Stacked layers */}
       <div className="flex-1 relative overflow-hidden">
-        {/* Chat layer — always mounted */}
+        {/* Chat layer */}
         <div
           className="absolute inset-0 transition-opacity duration-300 ease-in-out"
           style={{
@@ -98,19 +94,19 @@ export default function CenterStage({
           {children}
         </div>
 
-        {/* Whiteboard layer — always mounted when chatId exists */}
+        {/* Whiteboard layer */}
         {chatId && (
-        <div
+          <div
             className="absolute inset-0 transition-opacity duration-300 ease-in-out overflow-hidden"
             style={{
-            opacity: mode === 'whiteboard' ? 1 : 0,
-            pointerEvents: mode === 'whiteboard' ? 'auto' : 'none',
-            zIndex: mode === 'whiteboard' ? 2 : 1,
+              opacity: mode === 'whiteboard' ? 1 : 0,
+              pointerEvents: mode === 'whiteboard' ? 'auto' : 'none',
+              zIndex: mode === 'whiteboard' ? 2 : 1,
             }}
-        >
-            <WhiteboardLayer chatId={chatId} />
+          >
+            {/* FIX 1: pass onAfterSnapshot through */}
+            <WhiteboardLayer chatId={chatId} onAfterSnapshot={onAfterSnapshot} />
 
-            {/* Floating mic on whiteboard */}
             {mode === 'whiteboard' && (
               <FloatingMic
                 voice={voice}

@@ -2,12 +2,24 @@
 
 import { useState, useRef, useEffect, FormEvent, useCallback } from 'react'
 import { useChatStore } from '@/store/chatStore'
+import { useUIStore } from '@/store/uiStore'
 import { useWebSocket } from '@/hooks/useWebSocket'
 import { useVoice } from '@/hooks/useVoice'
 import CenterStage from '@/components/CenterStage'
 import type { Document, Citation } from '@/types'
 
-// ── URL → clickable links ─────────────────────────────────────────
+// ── YouTube embed helper ──────────────────────────────────────────
+function getYouTubeId(url: string): string | null {
+  const m = url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([a-zA-Z0-9_-]{11})/)
+  return m ? m[1] : null
+}
+
+// ── Inline image URL helper ───────────────────────────────────────
+function isImageUrl(url: string): boolean {
+  return /\.(png|jpg|jpeg|gif|webp|svg)(\?.*)?$/i.test(url)
+}
+
+// ── URL → clickable links + YouTube embeds + image previews ──────
 function MessageContent({ content }: { content: string }) {
   const URL_RE = /https?:\/\/[^\s)>\]"']+/g
   const parts: Array<{ type: 'text' | 'url'; value: string }> = []
@@ -25,6 +37,38 @@ function MessageContent({ content }: { content: string }) {
     <>
       {parts.map((p, i) => {
         if (p.type === 'url') {
+          // FIX 2: YouTube embed inline
+          const ytId = getYouTubeId(p.value)
+          if (ytId) {
+            return (
+              <span key={i} className="block my-2">
+                <iframe
+                  width="100%"
+                  height="200"
+                  src={`https://www.youtube.com/embed/${ytId}`}
+                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                  allowFullScreen
+                  className="rounded-xl"
+                  style={{ maxWidth: 360, border: '1px solid var(--border)' }}
+                />
+              </span>
+            )
+          }
+
+          // FIX 2: image URL inline preview
+          if (isImageUrl(p.value)) {
+            return (
+              <span key={i} className="block my-2">
+                <img
+                  src={p.value}
+                  alt="image"
+                  className="rounded-xl max-h-52 object-contain"
+                  style={{ border: '1px solid var(--border)' }}
+                />
+              </span>
+            )
+          }
+
           let label = p.value
           try {
             const u = new URL(p.value)
@@ -190,13 +234,8 @@ function DocumentPanel({
 function VoiceOrb({ isListening, isSpeaking }: { isListening: boolean; isSpeaking: boolean }) {
   if (!isListening && !isSpeaking) return null
   return (
-    <div
-      className="fixed bottom-24 left-1/2 -translate-x-1/2 z-50 flex flex-col items-center gap-2 pointer-events-none"
-    >
-      <div
-        className="relative flex items-center justify-center"
-        style={{ width: 64, height: 64 }}
-      >
+    <div className="fixed bottom-24 left-1/2 -translate-x-1/2 z-50 flex flex-col items-center gap-2 pointer-events-none">
+      <div className="relative flex items-center justify-center" style={{ width: 64, height: 64 }}>
         {[0, 1, 2].map(i => (
           <div
             key={i}
@@ -214,9 +253,7 @@ function VoiceOrb({ isListening, isSpeaking }: { isListening: boolean; isSpeakin
           style={{
             background: isListening ? 'rgba(200,50,50,.9)' : 'rgba(196,178,94,.85)',
             backdropFilter: 'blur(8px)',
-            boxShadow: isListening
-              ? '0 0 20px rgba(220,60,60,.5)'
-              : '0 0 20px rgba(196,178,94,.4)',
+            boxShadow: isListening ? '0 0 20px rgba(220,60,60,.5)' : '0 0 20px rgba(196,178,94,.4)',
           }}
         >
           {isListening ? '🎙️' : '🔊'}
@@ -252,11 +289,15 @@ export default function Home() {
     loadChats, createChat, deleteChat, renameChat,
     setCurrentChat, sendMessage, clearChat,
     uploadDocument, deleteDocument,
+    setProcessing,
   } = useChatStore()
 
-  const currentMessages   = currentChatId ? (messagesByChatId[currentChatId] || []) : []
-  const currentDocuments  = currentChatId ? (documentsByChatId[currentChatId] || []) : []
-  const { send }          = useWebSocket(currentChatId || '')
+  // FIX 3: watch board mode for auto-collapse
+  const { mode } = useUIStore()
+
+  const currentMessages  = currentChatId ? (messagesByChatId[currentChatId] || []) : []
+  const currentDocuments = currentChatId ? (documentsByChatId[currentChatId] || []) : []
+  const { send }         = useWebSocket(currentChatId || '')
 
   const [input, setInput]                 = useState('')
   const [showMemory, setShowMemory]       = useState(false)
@@ -268,10 +309,18 @@ export default function Home() {
   const [uploadError, setUploadError]     = useState<string | null>(null)
   const [voiceEnabled, setVoiceEnabled]   = useState(false)
 
-  const bottomRef      = useRef<HTMLDivElement>(null)
-  const editInputRef   = useRef<HTMLInputElement>(null)
-  const lastSpokenId   = useRef<string | null>(null)
-  const callbackRef    = useRef<(text: string) => void>(() => {})
+  const bottomRef    = useRef<HTMLDivElement>(null)
+  const editInputRef = useRef<HTMLInputElement>(null)
+  const lastSpokenId = useRef<string | null>(null)
+  const callbackRef  = useRef<(text: string) => void>(() => {})
+
+  // FIX 3: auto-collapse panels when switching to board, don't auto-restore on chat
+  useEffect(() => {
+    if (mode === 'whiteboard') {
+      setSidebarOpen(false)
+      setDocPanelOpen(false)
+    }
+  }, [mode])
 
   // ── Voice ──────────────────────────────────────────────────────
   const voice = useVoice(useCallback((text: string) => callbackRef.current(text), []))
@@ -302,6 +351,13 @@ export default function Home() {
   useEffect(() => { loadConfig(); loadChats() }, [])
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [currentMessages, streamingContent])
   useEffect(() => { if (editingChatId) editInputRef.current?.focus() }, [editingChatId])
+
+  // FIX 1: after snapshot is added to chat, trigger agent via WS
+  const handleAfterSnapshot = useCallback(() => {
+    if (!currentChatId) return
+    setProcessing(true)
+    send('The user shared a whiteboard snapshot. Please acknowledge it and offer to help.')
+  }, [currentChatId, send, setProcessing])
 
   const handleChatAreaClick = useCallback((e: React.MouseEvent) => {
     const target = e.target as HTMLElement
@@ -382,7 +438,7 @@ export default function Home() {
     }
   }
 
-  // ── Header fragments for CenterStage ───────────────────────────
+  // ── Header fragments ────────────────────────────────────────────
 
   const headerLeft = (
     <>
@@ -446,7 +502,7 @@ export default function Home() {
   return (
     <main className="flex h-screen overflow-hidden" style={{ background: 'var(--bg-main)' }}>
 
-      {/* ── Hover-to-open sentinel — left edge ── */}
+      {/* Hover-to-open sentinel — left edge */}
       {!sidebarOpen && (
         <div
           className="fixed left-0 top-0 h-full z-50"
@@ -455,7 +511,7 @@ export default function Home() {
         />
       )}
 
-      {/* ── Hover-to-open sentinel — right edge ── */}
+      {/* Hover-to-open sentinel — right edge */}
       {!docPanelOpen && currentChatId && (
         <div
           className="fixed right-0 top-0 h-full z-50"
@@ -464,10 +520,9 @@ export default function Home() {
         />
       )}
 
-      {/* ── Voice orb ── */}
       <VoiceOrb isListening={voice.isListening} isSpeaking={voice.isSpeaking} />
 
-      {/* ── Left sidebar (emerald) — UNCHANGED ── */}
+      {/* Left sidebar */}
       <aside
         className="sidebar sidebar-collapse flex-shrink-0 flex flex-col"
         style={{ width: sidebarOpen ? 224 : 0 }}
@@ -559,7 +614,7 @@ export default function Home() {
         </div>
       </aside>
 
-      {/* ── Center: CenterStage (Chat + Whiteboard) ── */}
+      {/* Center: CenterStage */}
       <div onClick={handleChatAreaClick} className="flex-1 min-w-0 h-full">
         <CenterStage
           chatId={currentChatId}
@@ -568,10 +623,10 @@ export default function Home() {
           voice={voice}
           isProcessing={isProcessing}
           onMicClick={handleMicClick}
+          onAfterSnapshot={handleAfterSnapshot}
         >
-          {/* ── Chat content (always mounted inside CenterStage) ── */}
+          {/* Chat content */}
           <div className="flex flex-col h-full">
-            {/* Messages */}
             <div className="flex-1 overflow-y-auto scrollbar-thin px-6 py-5 space-y-4">
               {!currentChatId ? (
                 <div className="flex flex-col items-center justify-center h-full gap-4">
@@ -604,7 +659,6 @@ export default function Home() {
                       key={msg.id}
                       className={`flex flex-col ${msg.role === 'user' ? 'items-end' : 'items-start'}`}
                     >
-                      {/* Attachment image (whiteboard snapshot) */}
                       {msg.attachment?.type === 'image' && (
                         <div className={`max-w-[78%] mb-1 ${msg.role === 'user' ? 'self-end' : 'self-start'}`}>
                           <img
@@ -773,7 +827,7 @@ export default function Home() {
         </CenterStage>
       </div>
 
-      {/* ── Right: Doc panel (dark emerald) — UNCHANGED ── */}
+      {/* Right: Doc panel */}
       {currentChatId && (
         <aside
           className="sidebar-collapse flex-shrink-0"
@@ -788,7 +842,7 @@ export default function Home() {
         </aside>
       )}
 
-      {/* ── Memory Modal ── */}
+      {/* Memory Modal */}
       {showMemory && (
         <div
           className="modal-backdrop fixed inset-0 flex items-center justify-center z-50"

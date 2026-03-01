@@ -6,6 +6,72 @@
 
 ## Important Facts
 
+- User likes cat pictures
+
+
+- User wants to see pictures of cats
+
+
+- User is interested in Xiaomi Vision Gran Turismo
+
+
+- User wants to watch the Xiaomi Vision Gran Turismo Debut video
+
+
+- User has requested funny kids videos multiple times
+
+
+- User prefers funny kids videos
+
+
+- User may find variables/equations challenging
+
+
+- User's goal involves progressing to calculus
+
+
+- User is learning one-step equations
+
+
+- User has made 5+ requests for videos on variables and equations
+
+
+- User requests educational videos on math topics
+
+
+- User has requested simple algebra videos 5+ times, persistently repeating "another video". Stuck on basics like symbols/variables/equations.
+
+
+- User appears stuck on algebra symbols/variables
+
+
+- User has repeatedly requested simple algebra videos (3 times)
+
+
+- User prefers video tutorials for learning simple algebra
+
+
+- User has repeatedly asked about natural attractions (6 times)
+
+
+- User prefers nature
+
+
+- User is located near Castries, St. Lucia
+
+
+- User may be planning a visit to beautiful places like Pitons
+
+
+- User has specified criteria for beauty (e.g., nature, city)
+
+
+- User has previously asked about this topic
+
+
+- User has a spot in Castries, St. Lucia
+
+
 - User believes they are horrible at calculus
 
 

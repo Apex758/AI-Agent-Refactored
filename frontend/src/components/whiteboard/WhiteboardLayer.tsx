@@ -5,7 +5,6 @@ import { useCallback, useState } from 'react'
 import { useWhiteboardStore } from '@/store/whiteboardStore'
 import { useChatStore } from '@/store/chatStore'
 
-// Dynamic import — TLDraw is client-only (uses window/document)
 const Whiteboard = dynamic(() => import('./Whiteboard'), {
   ssr: false,
   loading: () => (
@@ -17,9 +16,10 @@ const Whiteboard = dynamic(() => import('./Whiteboard'), {
 
 interface WhiteboardLayerProps {
   chatId: string
+  onAfterSnapshot?: () => void  // FIX 1: callback to trigger agent after snapshot
 }
 
-export default function WhiteboardLayer({ chatId }: WhiteboardLayerProps) {
+export default function WhiteboardLayer({ chatId, onAfterSnapshot }: WhiteboardLayerProps) {
   const { exportAsImage } = useWhiteboardStore()
   const { addMessage } = useChatStore()
   const [exporting, setExporting] = useState(false)
@@ -33,7 +33,6 @@ export default function WhiteboardLayer({ chatId }: WhiteboardLayerProps) {
         return
       }
 
-      // Convert blob to data URL
       const reader = new FileReader()
       reader.onloadend = () => {
         const dataUrl = reader.result as string
@@ -50,6 +49,8 @@ export default function WhiteboardLayer({ chatId }: WhiteboardLayerProps) {
           },
         }
         addMessage(msg)
+        // FIX 1: trigger agent to respond after image is in chat
+        onAfterSnapshot?.()
       }
       reader.readAsDataURL(blob)
     } catch (e) {
@@ -57,14 +58,12 @@ export default function WhiteboardLayer({ chatId }: WhiteboardLayerProps) {
     } finally {
       setExporting(false)
     }
-  }, [exportAsImage, addMessage])
+  }, [exportAsImage, addMessage, onAfterSnapshot])
 
   return (
     <div style={{ position: 'absolute', inset: 0 }}>
-      {/* TLDraw canvas */}
       <Whiteboard chatId={chatId} />
 
-      {/* Snapshot button — bottom-right overlay */}
       <button
         onClick={handleSnapshot}
         disabled={exporting}
