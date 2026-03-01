@@ -75,12 +75,6 @@ async def websocket_chat(ws: WebSocket, client_id: str):
     gateway = get_gateway()
 
     try:
-        # Welcome
-        await ws_manager.send(client_id, {
-            "type": "system",
-            "content": f"Connected to {gateway.get_personality()[:50]}..."
-        })
-
         while True:
             data = await ws.receive_text()
             msg = json.loads(data)
