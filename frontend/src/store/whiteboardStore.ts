@@ -14,6 +14,7 @@ interface WhiteboardStore {
   exportAsImage: () => Promise<Blob | null>
   presentOnBoard: (scenePlan: ScenePlan) => void
   placeScrapedMedia: (images: string[], videoIds: string[]) => void
+  placeYouTubeVideos: (videoIds: string[]) => void
   placedMediaIds: string[]  // Track already-placed media to avoid duplicates
   clearPlacedMedia: () => void
 }
@@ -228,32 +229,32 @@ export const useWhiteboardStore = create<WhiteboardStore>((set, get) => ({
       })
     })
 
-    // Place YouTube video thumbnails as image shapes below the images
-    const yOffset = images.length > 0 ? IMG_H + GAP * 3 : 40
-    const VIDEO_W = 240
-    const VIDEO_H = 135 // 16:9 aspect ratio
-    videoIds.slice(0, 4).forEach((vtId, i) => {
-      const thumbUrl = `https://img.youtube.com/vi/${vtId}/mqdefault.jpg`
-      const assetId = `asset:scraped-video-${Date.now()}-${i}` as any
-      editorRef.createAssets([{
-        id: assetId,
-        type: 'image',
-        typeName: 'asset',
-        props: {
-          name: `video-${vtId}`,
-          src: thumbUrl,
-          w: VIDEO_W,
-          h: VIDEO_H,
-          mimeType: 'image/jpeg',
-          isAnimated: false,
-        },
-        meta: {},
-      }])
+  },
+
+  placeYouTubeVideos: (videoIds: string[]) => {
+    const { editorRef, placedMediaIds } = get()
+    if (!editorRef) return
+
+    // Filter out already-placed video IDs
+    const newIds = videoIds.filter(id => !placedMediaIds.includes(`yt-${id}`))
+    if (newIds.length === 0) return
+
+    // Mark as placed to prevent duplicates on re-renders
+    set(s => ({ placedMediaIds: [...s.placedMediaIds, ...newIds.map(id => `yt-${id}`)] }))
+
+    const viewportBounds = editorRef.getViewportScreenBounds()
+    const topLeft = editorRef.screenToPage({ x: viewportBounds.x, y: viewportBounds.y })
+
+    const W = 480
+    const H = 306 // 36px titlebar + 270px 16:9 video
+    const GAP = 20
+
+    newIds.forEach((videoId, i) => {
       editorRef.createShape({
-        type: 'image',
-        x: topLeft.x + i * (VIDEO_W + GAP),
-        y: topLeft.y + yOffset,
-        props: { assetId, w: VIDEO_W, h: VIDEO_H },
+        type: 'youtube',
+        x: topLeft.x + i * (W + GAP),
+        y: topLeft.y + 40,
+        props: { videoId, w: W, h: H },
       })
     })
   },

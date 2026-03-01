@@ -4,6 +4,9 @@ import { useCallback, useEffect, useRef } from 'react'
 import { Tldraw, Editor } from 'tldraw'
 import 'tldraw/tldraw.css'
 import { useWhiteboardStore } from '@/store/whiteboardStore'
+import { YouTubeShapeUtil } from './YouTubeShapeUtil'
+
+const SHAPE_UTILS = [YouTubeShapeUtil]
 
 interface WhiteboardProps {
   chatId: string
@@ -55,7 +58,7 @@ export default function Whiteboard({ chatId }: WhiteboardProps) {
 
   return (
     <div className="whiteboard-container" style={{ position: 'absolute', inset: 0 }}>
-      <Tldraw onMount={handleMount} />
+      <Tldraw onMount={handleMount} shapeUtils={SHAPE_UTILS} />
     </div>
   )
 }

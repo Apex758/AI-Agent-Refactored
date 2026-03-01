@@ -329,7 +329,7 @@ export default function Home() {
 
   // FIX 3: watch board mode for auto-collapse
   const { mode } = useUIStore()
-  const { placeScrapedMedia } = useWhiteboardStore()
+  const { placeYouTubeVideos } = useWhiteboardStore()
 
   const currentMessages  = currentChatId ? (messagesByChatId[currentChatId] || []) : []
   const currentDocuments = currentChatId ? (documentsByChatId[currentChatId] || []) : []
@@ -383,18 +383,20 @@ export default function Home() {
     if (voice.interimText) setInput(voice.interimText)
   }, [voice.interimText])
 
-  // ── Auto-place scraped media on the whiteboard ─────────────────
+  // ── Auto-place YouTube videos on the whiteboard ────────────────
   useEffect(() => {
-    const last = currentMessages[currentMessages.length - 1]
-    console.log('[DEBUG] Checking for scraped media:', { lastRole: last?.role, hasMedia: !!last?.media, media: last?.media })
-    if (last?.role === 'system' && last.media) {
-      const { images = [], videos = [] } = last.media
-      console.log('[DEBUG] Found media - images:', images.length, 'videos:', videos.length)
-      if (images.length > 0 || videos.length > 0) {
-        placeScrapedMedia(images, videos)
-      }
+    if (currentMessages.length === 0) return
+    const YT_RE = /(?:youtube\.com\/watch\?v=|youtu\.be\/)([a-zA-Z0-9_-]{11})/g
+    const seen = new Set<string>()
+    for (const msg of currentMessages) {
+      YT_RE.lastIndex = 0
+      let m: RegExpExecArray | null
+      while ((m = YT_RE.exec(msg.content)) !== null) seen.add(m[1])
+      // Also pick up IDs surfaced via the backend media scraper
+      msg.media?.videos?.forEach(id => seen.add(id))
     }
-  }, [currentMessages, placeScrapedMedia])
+    if (seen.size > 0) placeYouTubeVideos([...seen])
+  }, [currentMessages, placeYouTubeVideos])
 
   // ── General ────────────────────────────────────────────────────
   useEffect(() => { loadConfig(); loadChats() }, [])

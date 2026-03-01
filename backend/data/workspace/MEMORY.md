@@ -6,6 +6,21 @@
 
 ## Important Facts
 
+- User wants to see a video of a puppy
+
+
+- User wants to see videos of puppies
+
+
+- User requests another funny kids fails compilation video
+
+
+- User enjoys funny kids fails compilation videos and requests more
+
+
+- User wants to watch funny videos
+
+
 - User requested another funny video, prefers funny kids fails compilations
 
 
