@@ -2,199 +2,96 @@
 Memory Manager — OpenClaw-style persistent memory.
 
 Architecture:
-  - Markdown files are the source of truth (human-readable, editable, git-friendly)
-  - MEMORY.md = curated long-term facts (preferences, identity, key decisions)
-  - memory/YYYY-MM-DD.md = daily conversation logs (append-only)
-  - SQLite + numpy for vector similarity search over all memory files
-  - Auto-capture: after every assistant turn, extract & store important info
-  - Auto-recall: before every LLM call, inject relevant memories
+  - Markdown files are the source of truth
+  - MEMORY.md = global long-term facts
+  - chats/{chat_id}.md = per-chat memory (summary + keywords + key facts)
+  - memory/YYYY-MM-DD.md = daily conversation logs
+  - SQLite for conversation history + chat metadata (no vectors)
+  - ChromaDB for all vector search — persistent, real semantic search
 """
-import os
 import json
 import hashlib
 import sqlite3
-import numpy as np
 from datetime import datetime, date
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional
 from pathlib import Path
 
 from app.core.config import settings
 from app.core.logging import logger
 
 
-class MemoryManager:
-    """Manages persistent memory using Markdown files + vector index."""
+def _get_chroma_ef():
+    """
+    Return the ChromaDB embedding function.
+    Uses OpenAI if key is set, otherwise falls back to the built-in
+    sentence-transformers model (runs locally, no API key needed).
+    """
+    if settings.openai_api_key:
+        from chromadb.utils.embedding_functions import OpenAIEmbeddingFunction
+        return OpenAIEmbeddingFunction(
+            api_key=settings.openai_api_key,
+            model_name="text-embedding-3-small",
+        )
+    else:
+        from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
+        return SentenceTransformerEmbeddingFunction(model_name="all-MiniLM-L6-v2")
 
+
+def _chunk_text(text: str, chunk_size: int = 400, overlap: int = 50) -> List[str]:
+    """
+    Split text into overlapping word-count chunks for better retrieval.
+    400 words ~ 500 tokens. Overlap ensures context isn't lost at boundaries.
+    """
+    words = text.split()
+    if len(words) <= chunk_size:
+        return [text] if text.strip() else []
+    chunks = []
+    start = 0
+    while start < len(words):
+        chunk = " ".join(words[start:start + chunk_size])
+        if chunk.strip():
+            chunks.append(chunk)
+        start += chunk_size - overlap
+    return chunks
+
+
+class MemoryManager:
     def __init__(self, workspace: Optional[str] = None):
         self.workspace = Path(workspace or settings.memory_workspace)
         self.memory_dir = self.workspace / "memory"
+        self.chats_dir = self.workspace / "chats"
+        self.chroma_dir = self.workspace / "chroma"
         self.memory_dir.mkdir(parents=True, exist_ok=True)
+        self.chats_dir.mkdir(parents=True, exist_ok=True)
+        self.chroma_dir.mkdir(parents=True, exist_ok=True)
 
         self.memory_file = self.workspace / "MEMORY.md"
         self.db_path = self.workspace / ".memory_index.db"
-        self._embedder = None
+
+        self._chroma_client = None
+        self._collection = None
+
         self._init_db()
+        self._init_chroma()
         self._ensure_memory_file()
 
-    # ── Markdown Operations ──────────────────────────────────────────
+    # ── ChromaDB Init ────────────────────────────────────────────────
 
-    def _ensure_memory_file(self):
-        """Create MEMORY.md if it doesn't exist."""
-        if not self.memory_file.exists():
-            self.memory_file.write_text(
-                "# Agent Memory\n\n"
-                "## User Profile\n\n"
-                "<!-- Add user facts, preferences, identity here -->\n\n"
-                "## Key Decisions\n\n"
-                "## Important Facts\n\n"
-            )
-
-    def get_memory_file(self) -> str:
-        """Read curated MEMORY.md."""
-        if self.memory_file.exists():
-            return self.memory_file.read_text()
-        return ""
-
-    def update_memory_file(self, content: str):
-        """Overwrite MEMORY.md (the agent curates this)."""
-        self.memory_file.write_text(content)
-        self._index_file(str(self.memory_file))
-
-    def append_to_memory(self, section: str, content: str):
-        """Append content under a section heading in MEMORY.md."""
-        current = self.get_memory_file()
-        marker = f"## {section}"
-        if marker in current:
-            # Insert after the section header
-            parts = current.split(marker, 1)
-            updated = parts[0] + marker + "\n\n" + content + "\n" + parts[1]
-        else:
-            updated = current + f"\n\n## {section}\n\n{content}\n"
-        self.update_memory_file(updated)
-
-    def get_daily_log(self, log_date: Optional[date] = None) -> str:
-        """Read a daily log file."""
-        d = log_date or date.today()
-        path = self.memory_dir / f"{d.isoformat()}.md"
-        if path.exists():
-            return path.read_text()
-        return ""
-
-    def append_daily_log(self, entry: str, log_date: Optional[date] = None):
-        """Append to today's daily log."""
-        d = log_date or date.today()
-        path = self.memory_dir / f"{d.isoformat()}.md"
-
-        if not path.exists():
-            path.write_text(f"# Daily Log — {d.isoformat()}\n\n")
-
-        timestamp = datetime.now().strftime("%H:%M")
-        with open(path, "a") as f:
-            f.write(f"\n### {timestamp}\n\n{entry}\n")
-
-        self._index_file(str(path))
-
-    # ── Auto-Capture ─────────────────────────────────────────────────
-
-    async def auto_capture(self, user_msg: str, assistant_msg: str, client_id: str = "default"):
-        """
-        After every turn, capture important information.
-        Stores conversation snippet in daily log.
-        Extracts key facts for MEMORY.md via LLM (if enabled).
-        """
-        if not settings.memory_auto_capture:
-            return
-
-        # Always log to daily file
-        entry = f"**User ({client_id}):** {user_msg[:500]}\n\n**Assistant:** {assistant_msg[:500]}"
-        self.append_daily_log(entry)
-
-        # Extract key facts using LLM (async, non-blocking)
-        try:
-            await self._extract_and_store_facts(user_msg, assistant_msg)
-        except Exception as e:
-            logger.warning(f"Memory extraction failed: {e}")
-
-    async def _extract_and_store_facts(self, user_msg: str, assistant_msg: str):
-        """Use LLM to extract storable facts from conversation."""
-        from app.core.llm import get_llm
-
-        llm = get_llm()
-        prompt = (
-            "Extract any important facts, preferences, or decisions from this exchange. "
-            "Return JSON: {\"facts\": [\"fact1\", \"fact2\"]} or {\"facts\": []} if nothing important.\n\n"
-            f"User: {user_msg[:300]}\nAssistant: {assistant_msg[:300]}"
+    def _init_chroma(self):
+        """Initialize persistent ChromaDB client and collection."""
+        import chromadb
+        self._chroma_client = chromadb.PersistentClient(path=str(self.chroma_dir))
+        self._collection = self._chroma_client.get_or_create_collection(
+            name="agent_memory",
+            embedding_function=_get_chroma_ef(),
+            metadata={"hnsw:space": "cosine"},
         )
+        logger.info(f"ChromaDB ready — {self._collection.count()} documents indexed")
 
-        result = await llm.generate(
-            messages=[{"role": "user", "content": prompt}],
-            system_prompt="You extract key facts from conversations. Return only valid JSON.",
-        )
-
-        content = result.get("content", "")
-        try:
-            # Try to parse JSON from response
-            if "{" in content:
-                json_str = content[content.index("{"):content.rindex("}") + 1]
-                data = json.loads(json_str)
-                facts = data.get("facts", [])
-                for fact in facts:
-                    if fact.strip():
-                        self.append_to_memory("Important Facts", f"- {fact.strip()}")
-                        await self._index_text(fact.strip(), "extracted_fact")
-        except (json.JSONDecodeError, ValueError):
-            pass
-
-    # ── Auto-Recall ──────────────────────────────────────────────────
-
-    async def auto_recall(self, query: str, top_k: int = 5) -> str:
-        """
-        Before every LLM call, retrieve relevant memories.
-        Combines: MEMORY.md header + today's log + semantic search results.
-        """
-        if not settings.memory_auto_recall:
-            return ""
-
-        parts = []
-
-        # 1. Core identity from MEMORY.md (first 2000 chars)
-        mem = self.get_memory_file()
-        if mem:
-            parts.append(f"## Curated Memory\n{mem[:2000]}")
-
-        # 2. Today + yesterday's log
-        today_log = self.get_daily_log()
-        if today_log:
-            parts.append(f"## Today's Context\n{today_log[:1500]}")
-
-        from datetime import timedelta
-        yesterday_log = self.get_daily_log(date.today() - timedelta(days=1))
-        if yesterday_log:
-            parts.append(f"## Yesterday's Context\n{yesterday_log[:1000]}")
-
-        # 3. Semantic search for query-relevant memories
-        search_results = await self.search(query, top_k=top_k)
-        if search_results:
-            snippets = "\n".join([f"- {r['text'][:200]}" for r in search_results])
-            parts.append(f"## Relevant Memories\n{snippets}")
-
-        return "\n\n".join(parts) if parts else ""
-
-    # ── Vector Search ────────────────────────────────────────────────
+    # ── SQLite Init (conversations + chats metadata only) ────────────
 
     def _init_db(self):
-        """Initialize SQLite database for vector index."""
         conn = sqlite3.connect(str(self.db_path))
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS memory_vectors (
-                id TEXT PRIMARY KEY,
-                text TEXT NOT NULL,
-                source TEXT NOT NULL,
-                embedding BLOB,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                hash TEXT UNIQUE
-            )
-        """)
         conn.execute("""
             CREATE TABLE IF NOT EXISTS conversations (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -204,138 +101,393 @@ class MemoryManager:
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS chats (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_conv_client ON conversations(client_id)")
         conn.commit()
         conn.close()
 
-    async def _get_embedding(self, text: str) -> List[float]:
-        """Generate embedding for text."""
-        if settings.embedding_provider == "openai":
-            from openai import AsyncOpenAI
-            client = AsyncOpenAI(api_key=settings.openai_api_key)
-            response = await client.embeddings.create(
-                model="text-embedding-3-small",
-                input=text[:8000],
+    # ── Global Memory (Markdown) ─────────────────────────────────────
+
+    def _ensure_memory_file(self):
+        if not self.memory_file.exists():
+            self.memory_file.write_text(
+                "# Agent Memory\n\n## User Profile\n\n## Key Decisions\n\n## Important Facts\n\n"
             )
-            return response.data[0].embedding
+
+    def get_memory_file(self) -> str:
+        return self.memory_file.read_text() if self.memory_file.exists() else ""
+
+    def update_memory_file(self, content: str):
+        self.memory_file.write_text(content)
+        self._index_file(str(self.memory_file))
+
+    def append_to_memory(self, section: str, content: str):
+        current = self.get_memory_file()
+        marker = f"## {section}"
+        if marker in current:
+            parts = current.split(marker, 1)
+            updated = parts[0] + marker + "\n\n" + content + "\n" + parts[1]
         else:
-            # Fallback: simple TF-IDF-like hash embedding
-            return self._simple_embedding(text)
+            updated = current + f"\n\n## {section}\n\n{content}\n"
+        self.update_memory_file(updated)
 
-    def _simple_embedding(self, text: str, dim: int = 256) -> List[float]:
-        """Fallback embedding using character n-gram hashing."""
-        vec = np.zeros(dim)
-        words = text.lower().split()
-        for w in words:
-            h = int(hashlib.md5(w.encode()).hexdigest(), 16)
-            idx = h % dim
-            vec[idx] += 1.0
-        norm = np.linalg.norm(vec)
-        if norm > 0:
-            vec = vec / norm
-        return vec.tolist()
+    # ── Per-Chat Memory ──────────────────────────────────────────────
 
-    async def _index_text(self, text: str, source: str):
-        """Index a text snippet into the vector store."""
-        text_hash = hashlib.sha256(text.encode()).hexdigest()[:32]
+    def get_chat_memory(self, chat_id: str) -> str:
+        path = self.chats_dir / f"{chat_id}.md"
+        return path.read_text() if path.exists() else ""
 
-        conn = sqlite3.connect(str(self.db_path))
-        existing = conn.execute("SELECT id FROM memory_vectors WHERE hash = ?", (text_hash,)).fetchone()
-        if existing:
-            conn.close()
+    def _write_chat_memory(self, chat_id: str, content: str):
+        path = self.chats_dir / f"{chat_id}.md"
+        path.write_text(content)
+
+    async def update_chat_memory(self, chat_id: str, user_msg: str, assistant_msg: str):
+        """Regenerate this chat's memory file: summary + keywords + facts."""
+        from app.core.llm import get_llm
+
+        history = self.get_history(chat_id, limit=30)
+        conversation_text = "\n".join(
+            f"{h['role'].upper()}: {h['content'][:300]}" for h in history
+        )
+        if not conversation_text.strip():
             return
 
+        llm = get_llm()
+        prompt = (
+            "Analyze this conversation and return JSON with these exact keys:\n"
+            '{"summary": "2-3 sentence summary of what was discussed", '
+            '"keywords": ["keyword1", "keyword2", ...up to 10], '
+            '"key_facts": ["fact1", "fact2", ...important things said or decided]}\n\n'
+            "Return ONLY valid JSON, nothing else.\n\n"
+            f"Conversation:\n{conversation_text[:3000]}"
+        )
         try:
-            embedding = await self._get_embedding(text)
-            emb_bytes = np.array(embedding, dtype=np.float32).tobytes()
-
-            conn.execute(
-                "INSERT OR IGNORE INTO memory_vectors (id, text, source, embedding, hash) VALUES (?, ?, ?, ?, ?)",
-                (text_hash[:16], text, source, emb_bytes, text_hash),
+            result = await llm.generate(
+                messages=[{"role": "user", "content": prompt}],
+                system_prompt="You extract structured memory from conversations. Return only valid JSON.",
             )
-            conn.commit()
+            content = result.get("content", "")
+            if "{" in content:
+                json_str = content[content.index("{"):content.rindex("}") + 1]
+                data = json.loads(json_str)
+                summary = data.get("summary", "")
+                keywords = data.get("keywords", [])
+                facts = data.get("key_facts", [])
+
+                conn = sqlite3.connect(str(self.db_path))
+                row = conn.execute("SELECT name FROM chats WHERE id = ?", (chat_id,)).fetchone()
+                conn.close()
+                chat_name = row[0] if row else chat_id
+
+                md = f"# Chat Memory: {chat_name}\n\n"
+                md += f"**Chat ID:** {chat_id}\n"
+                md += f"**Last Updated:** {datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n"
+                md += f"## Summary\n{summary}\n\n"
+                md += f"## Keywords\n{', '.join(keywords)}\n\n"
+                if facts:
+                    md += "## Key Facts\n"
+                    for f in facts:
+                        md += f"- {f}\n"
+
+                self._write_chat_memory(chat_id, md)
+
+                # Index the summary into ChromaDB for cross-chat semantic search
+                if summary:
+                    await self._index_text(
+                        summary,
+                        source=f"chat_summary:{chat_id}",
+                        metadata={"type": "chat_summary", "chat_id": chat_id, "chat_name": chat_name},
+                    )
+                logger.info(f"Updated memory for chat {chat_id}")
         except Exception as e:
-            logger.warning(f"Failed to index text: {e}")
-        finally:
+            logger.warning(f"Chat memory update failed: {e}")
+
+    def search_all_chats(self, query: str, limit: int = 5) -> List[Dict]:
+        """
+        Search all chat memory files.
+        Tries ChromaDB semantic search on indexed summaries first,
+        falls back to keyword scan of .md files.
+        """
+        try:
+            count = self._collection.count()
+            if count > 0:
+                results = self._collection.query(
+                    query_texts=[query],
+                    n_results=min(limit, count),
+                    where={"type": "chat_summary"},
+                )
+                chroma_hits = {}
+                if results and results["documents"] and results["documents"][0]:
+                    for doc, meta, dist in zip(
+                        results["documents"][0],
+                        results["metadatas"][0],
+                        results["distances"][0],
+                    ):
+                        cid = meta.get("chat_id", "")
+                        if cid and cid not in chroma_hits:
+                            mem = self.get_chat_memory(cid)
+                            keywords = ""
+                            if "## Keywords" in mem:
+                                keywords = mem.split("## Keywords")[1].split("##")[0].strip()[:200]
+                            chroma_hits[cid] = {
+                                "chat_id": cid,
+                                "chat_name": meta.get("chat_name", cid),
+                                "score": round(1 - dist, 3),
+                                "summary": doc[:300],
+                                "keywords": keywords,
+                            }
+                if chroma_hits:
+                    return sorted(chroma_hits.values(), key=lambda x: x["score"], reverse=True)[:limit]
+        except Exception as e:
+            logger.warning(f"ChromaDB chat search failed, falling back to keyword: {e}")
+
+        # Keyword fallback
+        query_lower = query.lower()
+        results = []
+        for mem_file in self.chats_dir.glob("*.md"):
+            content = mem_file.read_text()
+            score = sum(1 for word in query_lower.split() if word in content.lower())
+            if score == 0:
+                continue
+            chat_id = mem_file.stem
+            name_line = [l for l in content.split("\n") if l.startswith("# Chat Memory:")]
+            chat_name = name_line[0].replace("# Chat Memory:", "").strip() if name_line else chat_id
+            summary = content.split("## Summary")[1].split("##")[0].strip()[:300] if "## Summary" in content else ""
+            keywords = content.split("## Keywords")[1].split("##")[0].strip()[:200] if "## Keywords" in content else ""
+            results.append({"chat_id": chat_id, "chat_name": chat_name, "score": score, "summary": summary, "keywords": keywords})
+        return sorted(results, key=lambda x: x["score"], reverse=True)[:limit]
+
+    # ── Daily Logs ───────────────────────────────────────────────────
+
+    def get_daily_log(self, log_date: Optional[date] = None) -> str:
+        d = log_date or date.today()
+        path = self.memory_dir / f"{d.isoformat()}.md"
+        return path.read_text() if path.exists() else ""
+
+    def append_daily_log(self, entry: str, log_date: Optional[date] = None):
+        d = log_date or date.today()
+        path = self.memory_dir / f"{d.isoformat()}.md"
+        if not path.exists():
+            path.write_text(f"# Daily Log — {d.isoformat()}\n\n")
+        timestamp = datetime.now().strftime("%H:%M")
+        with open(path, "a") as f:
+            f.write(f"\n### {timestamp}\n\n{entry}\n")
+        self._index_file(str(path))
+
+    # ── Auto-Capture ─────────────────────────────────────────────────
+
+    async def auto_capture(self, user_msg: str, assistant_msg: str, client_id: str = "default"):
+        if not settings.memory_auto_capture:
+            return
+
+        entry = f"**User ({client_id}):** {user_msg[:500]}\n\n**Assistant:** {assistant_msg[:500]}"
+        self.append_daily_log(entry)
+
+        try:
+            await self._extract_and_store_facts(user_msg, assistant_msg)
+        except Exception as e:
+            logger.warning(f"Fact extraction failed: {e}")
+
+        try:
+            await self.update_chat_memory(client_id, user_msg, assistant_msg)
+        except Exception as e:
+            logger.warning(f"Chat memory update failed: {e}")
+
+        try:
+            await self._auto_name_chat(client_id, user_msg, assistant_msg)
+        except Exception as e:
+            logger.warning(f"Chat auto-naming failed: {e}")
+
+    async def _extract_and_store_facts(self, user_msg: str, assistant_msg: str):
+        from app.core.llm import get_llm
+        llm = get_llm()
+        prompt = (
+            "Extract personal facts about the USER ONLY from this exchange — things like their preferences, "
+            "habits, goals, opinions, or personal details they revealed. "
+            "Do NOT include general knowledge, definitions, or facts about the world. "
+            "Only include what the user personally said, likes, dislikes, wants, or did.\n\n"
+            'Return JSON: {"facts": ["User likes X", "User wants to..."]} or {"facts": []} if nothing personal.\n\n'
+            f"User: {user_msg[:300]}\nAssistant: {assistant_msg[:300]}"
+        )
+        result = await llm.generate(
+            messages=[{"role": "user", "content": prompt}],
+            system_prompt="Extract personal user facts only. Return only valid JSON.",
+        )
+        content = result.get("content", "")
+        try:
+            if "{" in content:
+                json_str = content[content.index("{"):content.rindex("}") + 1]
+                data = json.loads(json_str)
+                for fact in data.get("facts", []):
+                    if fact.strip():
+                        self.append_to_memory("Important Facts", f"- {fact.strip()}")
+                        await self._index_text(
+                            fact.strip(),
+                            source="extracted_fact",
+                            metadata={"type": "user_fact"},
+                        )
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+    async def _auto_name_chat(self, chat_id: str, user_msg: str, assistant_msg: str):
+        conn = sqlite3.connect(str(self.db_path))
+        row = conn.execute("SELECT name FROM chats WHERE id = ?", (chat_id,)).fetchone()
+        conn.close()
+        if not row or not row[0].startswith("Chat "):
+            return
+        history = self.get_history(chat_id, limit=4)
+        if len(history) > 2:
+            return
+        from app.core.llm import get_llm
+        llm = get_llm()
+        prompt = (
+            "Give this conversation a short title (3-5 words max). "
+            "It should describe the topic, like a chapter title. "
+            "No quotes, no punctuation at the end. Just the title.\n\n"
+            f"User: {user_msg[:200]}\nAssistant: {assistant_msg[:200]}"
+        )
+        result = await llm.generate(
+            messages=[{"role": "user", "content": prompt}],
+            system_prompt="You generate short, descriptive chat titles. Respond with only the title, nothing else.",
+        )
+        name = result.get("content", "").strip().strip('"').strip("'")[:60]
+        if name:
+            conn = sqlite3.connect(str(self.db_path))
+            conn.execute("UPDATE chats SET name = ? WHERE id = ?", (name, chat_id))
+            conn.commit()
             conn.close()
+            logger.info(f"Named chat {chat_id}: {name}")
+
+    # ── Auto-Recall ──────────────────────────────────────────────────
+
+    async def auto_recall(self, query: str, top_k: int = 5) -> str:
+        if not settings.memory_auto_recall:
+            return ""
+
+        parts = []
+        mem = self.get_memory_file()
+        if mem:
+            parts.append(f"## Global Memory\n{mem[:2000]}")
+
+        today_log = self.get_daily_log()
+        if today_log:
+            parts.append(f"## Today's Context\n{today_log[:1500]}")
+
+        search_results = await self.search(query, top_k=top_k)
+        if search_results:
+            snippets = "\n".join([f"- {r['text'][:200]}" for r in search_results])
+            parts.append(f"## Relevant Memories\n{snippets}")
+
+        return "\n\n".join(parts) if parts else ""
+
+    # ── ChromaDB Vector Search ───────────────────────────────────────
+
+    async def _index_text(
+        self,
+        text: str,
+        source: str,
+        metadata: Optional[Dict] = None,
+    ):
+        """
+        Add a single text snippet to ChromaDB.
+        ChromaDB handles embedding generation via the configured embedding function.
+        Uses upsert so re-indexing the same text is idempotent.
+        """
+        if not text.strip():
+            return
+
+        doc_id = hashlib.sha256(text.encode()).hexdigest()[:32]
+        meta = {"source": source, **(metadata or {})}
+
+        try:
+            self._collection.upsert(
+                ids=[doc_id],
+                documents=[text],
+                metadatas=[meta],
+            )
+        except Exception as e:
+            logger.warning(f"ChromaDB index failed: {e}")
 
     def _index_file(self, filepath: str):
-        """Index a markdown file (splits into chunks)."""
+        """
+        Chunk a file into overlapping windows and index each chunk into ChromaDB.
+        Proper RAG chunking: 400 words per chunk, 50-word overlap.
+        """
         try:
-            with open(filepath, "r") as f:
-                content = f.read()
+            content = open(filepath).read()
         except Exception:
             return
 
-        # Split by sections or paragraphs
-        chunks = []
-        current = ""
-        for line in content.split("\n"):
-            if line.startswith("###") and current.strip():
-                chunks.append(current.strip())
-                current = line + "\n"
-            else:
-                current += line + "\n"
-        if current.strip():
-            chunks.append(current.strip())
-
-        # Index chunks synchronously (called from sync context)
+        chunks = _chunk_text(content, chunk_size=400, overlap=50)
         import asyncio
-        for chunk in chunks:
-            if len(chunk) > 20:  # Skip tiny chunks
-                try:
-                    loop = asyncio.get_event_loop()
-                    if loop.is_running():
-                        asyncio.create_task(self._index_text(chunk, filepath))
-                    else:
-                        loop.run_until_complete(self._index_text(chunk, filepath))
-                except RuntimeError:
-                    # No event loop, use simple embedding
-                    text_hash = hashlib.sha256(chunk.encode()).hexdigest()[:32]
-                    emb = self._simple_embedding(chunk)
-                    emb_bytes = np.array(emb, dtype=np.float32).tobytes()
-                    conn = sqlite3.connect(str(self.db_path))
-                    conn.execute(
-                        "INSERT OR IGNORE INTO memory_vectors (id, text, source, embedding, hash) VALUES (?, ?, ?, ?, ?)",
-                        (text_hash[:16], chunk, filepath, emb_bytes, text_hash),
+        for i, chunk in enumerate(chunks):
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    asyncio.create_task(
+                        self._index_text(chunk, source=filepath, metadata={"type": "file_chunk", "chunk": i})
                     )
-                    conn.commit()
-                    conn.close()
+                else:
+                    loop.run_until_complete(
+                        self._index_text(chunk, source=filepath, metadata={"type": "file_chunk", "chunk": i})
+                    )
+            except RuntimeError:
+                doc_id = hashlib.sha256(chunk.encode()).hexdigest()[:32]
+                try:
+                    self._collection.upsert(
+                        ids=[doc_id],
+                        documents=[chunk],
+                        metadatas=[{"source": filepath, "type": "file_chunk", "chunk": i}],
+                    )
+                except Exception as e:
+                    logger.warning(f"Sync index failed: {e}")
 
     async def search(self, query: str, top_k: int = 5) -> List[Dict]:
-        """Semantic search across all indexed memory."""
-        query_embedding = await self._get_embedding(query)
-        query_vec = np.array(query_embedding, dtype=np.float32)
-
-        conn = sqlite3.connect(str(self.db_path))
-        rows = conn.execute("SELECT id, text, source, embedding FROM memory_vectors WHERE embedding IS NOT NULL").fetchall()
-        conn.close()
-
-        if not rows:
+        """
+        Semantic search using ChromaDB.
+        ChromaDB returns results sorted by distance (closest first).
+        We convert cosine distance → similarity score (1 - distance).
+        """
+        count = self._collection.count()
+        if count == 0:
             return []
 
-        results = []
-        for row_id, text, source, emb_bytes in rows:
-            stored_vec = np.frombuffer(emb_bytes, dtype=np.float32)
-            if len(stored_vec) != len(query_vec):
-                continue
-            # Cosine similarity
-            dot = np.dot(query_vec, stored_vec)
-            norm_q = np.linalg.norm(query_vec)
-            norm_s = np.linalg.norm(stored_vec)
-            if norm_q > 0 and norm_s > 0:
-                score = dot / (norm_q * norm_s)
-            else:
-                score = 0
-            results.append({"id": row_id, "text": text, "source": source, "score": float(score)})
+        try:
+            results = self._collection.query(
+                query_texts=[query],
+                n_results=min(top_k, count),
+            )
+        except Exception as e:
+            logger.warning(f"ChromaDB search failed: {e}")
+            return []
 
-        results.sort(key=lambda x: x["score"], reverse=True)
-        return results[:top_k]
+        if not results or not results["documents"] or not results["documents"][0]:
+            return []
 
-    # ── Conversation History (Short-term) ────────────────────────────
+        output = []
+        for doc, meta, dist in zip(
+            results["documents"][0],
+            results["metadatas"][0],
+            results["distances"][0],
+        ):
+            output.append({
+                "text": doc,
+                "source": meta.get("source", ""),
+                "score": round(1 - dist, 3),
+                "metadata": meta,
+            })
+
+        return output  # ChromaDB already returns closest-first
+
+    # ── Conversation History (SQLite) ────────────────────────────────
 
     def save_message(self, client_id: str, role: str, content: str):
-        """Save a message to conversation history."""
         conn = sqlite3.connect(str(self.db_path))
         conn.execute(
             "INSERT INTO conversations (client_id, role, content) VALUES (?, ?, ?)",
@@ -345,7 +497,6 @@ class MemoryManager:
         conn.close()
 
     def get_history(self, client_id: str, limit: int = 20) -> List[Dict]:
-        """Get recent conversation history."""
         conn = sqlite3.connect(str(self.db_path))
         rows = conn.execute(
             "SELECT role, content, created_at FROM conversations WHERE client_id = ? ORDER BY id DESC LIMIT ?",
@@ -355,35 +506,29 @@ class MemoryManager:
         return [{"role": r[0], "content": r[1], "timestamp": r[2]} for r in reversed(rows)]
 
     def clear_history(self, client_id: str):
-        """Clear conversation history for a client."""
         conn = sqlite3.connect(str(self.db_path))
         conn.execute("DELETE FROM conversations WHERE client_id = ?", (client_id,))
         conn.commit()
         conn.close()
 
-    # ── Memory Tools (exposed to the agent) ──────────────────────────
+    # ── Memory Tools (exposed to agent) ─────────────────────────────
 
     async def memory_store(self, content: str, tags: str = "") -> str:
-        """Tool: Store a memory explicitly."""
         self.append_to_memory("Important Facts", f"- {content}")
-        await self._index_text(content, "explicit_store")
+        await self._index_text(content, source="explicit_store", metadata={"type": "user_fact"})
         return f"Stored: {content[:100]}"
 
     async def memory_search_tool(self, query: str) -> str:
-        """Tool: Search memory semantically."""
         results = await self.search(query, top_k=5)
         if not results:
             return "No relevant memories found."
         return "\n".join([f"[{r['score']:.2f}] {r['text'][:200]}" for r in results])
 
     async def memory_get(self, file_path: str = "MEMORY.md") -> str:
-        """Tool: Read a specific memory file."""
         if file_path == "MEMORY.md":
             return self.get_memory_file()
         full_path = self.memory_dir / file_path
-        if full_path.exists():
-            return full_path.read_text()
-        return f"File not found: {file_path}"
+        return full_path.read_text() if full_path.exists() else f"File not found: {file_path}"
 
 
 # Singleton

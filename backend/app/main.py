@@ -1,6 +1,5 @@
 """
 AI Agent — Main entry point.
-Starts the FastAPI server with Web + optional WhatsApp channels.
 """
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -11,6 +10,7 @@ import os
 from app.core.config import settings
 from app.core.logging import logger
 from app.api.routes import router as api_router
+from app.api.chats import router as chats_router
 from app.channels.whatsapp import router as whatsapp_router, is_enabled as whatsapp_enabled
 from app.skills.loader import SkillLoader
 
@@ -22,7 +22,6 @@ def create_app() -> FastAPI:
         version="1.0.0",
     )
 
-    # CORS
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
@@ -31,17 +30,15 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-    # API routes (web channel + memory + tools)
     app.include_router(api_router, prefix="/api", tags=["agent"])
+    app.include_router(chats_router, prefix="/api/chats", tags=["chats"])
 
-    # WhatsApp channel (optional)
     if whatsapp_enabled():
         app.include_router(whatsapp_router, prefix="/api/whatsapp", tags=["whatsapp"])
         logger.info("WhatsApp channel: ENABLED")
     else:
-        logger.info("WhatsApp channel: DISABLED (set WHATSAPP_ENABLED=true to enable)")
+        logger.info("WhatsApp channel: DISABLED")
 
-    # Load skills
     skill_loader = SkillLoader()
     skills = skill_loader.load_all()
     if skills:
@@ -49,7 +46,6 @@ def create_app() -> FastAPI:
         skill_loader.register_skill_tools(get_tool_registry())
         logger.info(f"Loaded {len(skills)} skills")
 
-    # Serve frontend if built
     frontend_dir = os.path.join(os.path.dirname(__file__), "..", "..", "frontend", "dist")
     if os.path.exists(frontend_dir):
         app.mount("/static", StaticFiles(directory=frontend_dir), name="static")
@@ -66,11 +62,11 @@ def create_app() -> FastAPI:
                 "endpoints": {
                     "chat": "POST /api/chat",
                     "websocket": "WS /api/ws/{client_id}",
+                    "chats": "GET /api/chats",
                     "memory": "GET /api/memory",
                     "tools": "GET /api/tools",
                     "health": "GET /api/health",
                 },
-                "whatsapp": "enabled" if whatsapp_enabled() else "disabled",
             }
 
     @app.on_event("startup")
@@ -78,8 +74,6 @@ def create_app() -> FastAPI:
         logger.info(f"🤖 {settings.agent_name} starting...")
         logger.info(f"   LLM: {settings.llm_provider} / {settings.llm_model}")
         logger.info(f"   Memory: {settings.memory_workspace}")
-        logger.info(f"   Auto-capture: {settings.memory_auto_capture}")
-        logger.info(f"   Auto-recall: {settings.memory_auto_recall}")
 
     return app
 

@@ -20,3 +20,7 @@ Web UI: `http://localhost:8000` | WhatsApp: Configure webhook in .env
 - **Channels**: Web (always on), WhatsApp (optional via Twilio)
 - **Skills**: Drop SKILL.md files in `data/skills/` to extend capabilities
 - **Tools**: Web search, filesystem, scraper, custom tools via registry
+
+
+
+python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000

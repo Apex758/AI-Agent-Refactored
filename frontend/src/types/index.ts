@@ -7,6 +7,12 @@ export interface Message {
   timestamp: number
 }
 
+export interface Chat {
+  id: string
+  name: string
+  created_at: string
+}
+
 export interface MemoryResult {
   id: string
   text: string
@@ -20,17 +26,29 @@ export interface WSMessage {
 }
 
 export interface ChatStore {
-  messages: Message[]
+  // Chats list
+  chats: Chat[]
+  currentChatId: string | null
+  loadChats: () => Promise<void>
+  createChat: (name?: string) => Promise<void>
+  deleteChat: (id: string) => Promise<void>
+  renameChat: (id: string, name: string) => Promise<void>
+  setCurrentChat: (id: string) => void
+
+  // Messages (keyed by chatId)
+  messagesByChatId: Record<string, Message[]>
+  loadHistory: (chatId: string) => Promise<void>
+
+  // Current session state
   isProcessing: boolean
   streamingContent: string
-  memoryContent: string
   error: string | null
+
   sendMessage: (content: string) => void
   addMessage: (msg: Message) => void
   appendStreaming: (token: string) => void
   finalizeStreaming: () => void
   setProcessing: (v: boolean) => void
   setError: (e: string | null) => void
-  setMemory: (content: string) => void
   clearChat: () => void
 }

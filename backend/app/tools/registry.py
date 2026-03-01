@@ -1,6 +1,5 @@
 """
 Tool Registry — Manages tools the agent can use.
-Includes built-in tools + memory tools + custom skill loading.
 """
 import httpx
 import os
@@ -11,8 +10,6 @@ from app.core.logging import logger
 
 
 class Tool:
-    """A tool the agent can call."""
-
     def __init__(self, name: str, description: str, parameters: Dict, handler: Callable):
         self.name = name
         self.description = description
@@ -20,7 +17,6 @@ class Tool:
         self.handler = handler
 
     def get_schema(self) -> Dict:
-        """OpenAI function-calling schema."""
         return {
             "type": "function",
             "function": {
@@ -35,8 +31,6 @@ class Tool:
 
 
 class ToolRegistry:
-    """Registry of all available tools."""
-
     def __init__(self):
         self._tools: Dict[str, Tool] = {}
         self._register_builtins()
@@ -61,124 +55,107 @@ class ToolRegistry:
         return await tool.execute(**args)
 
     def _register_builtins(self):
-        """Register all built-in tools."""
-
-        # ── Web Search ──
         self.register(Tool(
             name="web_search",
             description="Search the web for current information",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "Search query"},
-                },
-                "required": ["query"],
-            },
+            parameters={"type": "object", "properties": {
+                "query": {"type": "string", "description": "Search query"},
+            }, "required": ["query"]},
             handler=self._web_search,
         ))
 
-        # ── Web Fetch ──
         self.register(Tool(
             name="web_fetch",
             description="Fetch and extract text content from a URL",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "url": {"type": "string", "description": "URL to fetch"},
-                },
-                "required": ["url"],
-            },
+            parameters={"type": "object", "properties": {
+                "url": {"type": "string", "description": "URL to fetch"},
+            }, "required": ["url"]},
             handler=self._web_fetch,
         ))
 
-        # ── Filesystem Read ──
         self.register(Tool(
             name="read_file",
             description="Read a file from the workspace",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "File path relative to workspace"},
-                },
-                "required": ["path"],
-            },
+            parameters={"type": "object", "properties": {
+                "path": {"type": "string", "description": "File path relative to workspace"},
+            }, "required": ["path"]},
             handler=self._read_file,
         ))
 
-        # ── Filesystem Write ──
         self.register(Tool(
             name="write_file",
             description="Write content to a file in the workspace",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "File path"},
-                    "content": {"type": "string", "description": "Content to write"},
-                },
-                "required": ["path", "content"],
-            },
+            parameters={"type": "object", "properties": {
+                "path": {"type": "string"},
+                "content": {"type": "string"},
+            }, "required": ["path", "content"]},
             handler=self._write_file,
         ))
 
-        # ── Shell Command ──
         self.register(Tool(
             name="run_command",
-            description="Run a shell command (use carefully)",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "command": {"type": "string", "description": "Shell command to execute"},
-                },
-                "required": ["command"],
-            },
+            description="Run a shell command",
+            parameters={"type": "object", "properties": {
+                "command": {"type": "string"},
+            }, "required": ["command"]},
             handler=self._run_command,
         ))
 
-        # ── Memory Tools ──
         self.register(Tool(
             name="memory_store",
-            description="Store important information in persistent memory (preferences, facts, decisions)",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "content": {"type": "string", "description": "Information to remember"},
-                    "tags": {"type": "string", "description": "Comma-separated tags", "default": ""},
-                },
-                "required": ["content"],
-            },
+            description="Store important information in persistent memory",
+            parameters={"type": "object", "properties": {
+                "content": {"type": "string", "description": "Information to remember"},
+                "tags": {"type": "string", "default": ""},
+            }, "required": ["content"]},
             handler=self._memory_store,
         ))
 
         self.register(Tool(
             name="memory_search",
             description="Search stored memories semantically",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "Search query"},
-                },
-                "required": ["query"],
-            },
+            parameters={"type": "object", "properties": {
+                "query": {"type": "string"},
+            }, "required": ["query"]},
             handler=self._memory_search,
         ))
 
         self.register(Tool(
             name="memory_get",
             description="Read a specific memory file (MEMORY.md or daily logs)",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "file_path": {"type": "string", "description": "File to read (e.g., MEMORY.md)", "default": "MEMORY.md"},
-                },
-                "required": [],
-            },
+            parameters={"type": "object", "properties": {
+                "file_path": {"type": "string", "default": "MEMORY.md"},
+            }, "required": []},
             handler=self._memory_get,
         ))
 
-    # ── Built-in Tool Handlers ───────────────────────────────────────
+        # ── Cross-chat search ──
+        self.register(Tool(
+            name="search_all_chats",
+            description=(
+                "Search across all past chat sessions by keywords. "
+                "Use this when the user references something from a previous conversation. "
+                "Returns matching chat summaries and key facts."
+            ),
+            parameters={"type": "object", "properties": {
+                "query": {"type": "string", "description": "Keywords to search for across all chats"},
+                "limit": {"type": "integer", "default": 5},
+            }, "required": ["query"]},
+            handler=self._search_all_chats,
+        ))
+
+        self.register(Tool(
+            name="get_chat_memory",
+            description="Read the full memory file for a specific past chat by chat_id",
+            parameters={"type": "object", "properties": {
+                "chat_id": {"type": "string", "description": "The chat ID to retrieve memory for"},
+            }, "required": ["chat_id"]},
+            handler=self._get_chat_memory,
+        ))
+
+    # ── Handlers ─────────────────────────────────────────────────────
 
     async def _web_search(self, query: str) -> Dict:
-        """Search using DuckDuckGo (free, no API key)."""
         try:
             async with httpx.AsyncClient() as client:
                 resp = await client.get(
@@ -192,13 +169,10 @@ class ToolRegistry:
                     soup = BeautifulSoup(resp.text, "html.parser")
                     results = []
                     for r in soup.select(".result")[:5]:
-                        title_el = r.select_one(".result__title")
-                        snippet_el = r.select_one(".result__snippet")
-                        link_el = r.select_one(".result__url")
                         results.append({
-                            "title": title_el.get_text(strip=True) if title_el else "",
-                            "snippet": snippet_el.get_text(strip=True) if snippet_el else "",
-                            "url": link_el.get_text(strip=True) if link_el else "",
+                            "title": (r.select_one(".result__title") or type('', (), {'get_text': lambda *a, **k: ''})()).get_text(strip=True),
+                            "snippet": (r.select_one(".result__snippet") or type('', (), {'get_text': lambda *a, **k: ''})()).get_text(strip=True),
+                            "url": (r.select_one(".result__url") or type('', (), {'get_text': lambda *a, **k: ''})()).get_text(strip=True),
                         })
                     return {"results": results, "query": query}
                 return {"error": f"Search failed: {resp.status_code}"}
@@ -206,7 +180,6 @@ class ToolRegistry:
             return {"error": str(e)}
 
     async def _web_fetch(self, url: str) -> Dict:
-        """Fetch and extract text from a URL."""
         try:
             async with httpx.AsyncClient() as client:
                 resp = await client.get(url, timeout=15, follow_redirects=True,
@@ -217,45 +190,35 @@ class ToolRegistry:
                     for s in soup(["script", "style"]):
                         s.decompose()
                     text = soup.get_text(separator="\n", strip=True)[:5000]
-                    title = soup.title.string if soup.title else ""
-                    return {"url": url, "title": title, "content": text}
+                    return {"url": url, "title": soup.title.string if soup.title else "", "content": text}
                 return {"error": f"Fetch failed: {resp.status_code}"}
         except Exception as e:
             return {"error": str(e)}
 
     async def _read_file(self, path: str) -> Dict:
-        """Read file from workspace."""
         from app.core.config import settings
         workspace = Path(settings.memory_workspace)
         full_path = (workspace / path).resolve()
-
-        # Security: stay within workspace
         if not str(full_path).startswith(str(workspace.resolve())):
             return {"error": "Access denied"}
         if not full_path.exists():
             return {"error": f"File not found: {path}"}
-
         try:
-            content = full_path.read_text()[:10000]
-            return {"path": path, "content": content}
+            return {"path": path, "content": full_path.read_text()[:10000]}
         except Exception as e:
             return {"error": str(e)}
 
     async def _write_file(self, path: str, content: str) -> Dict:
-        """Write file to workspace."""
         from app.core.config import settings
         workspace = Path(settings.memory_workspace)
         full_path = (workspace / path).resolve()
-
         if not str(full_path).startswith(str(workspace.resolve())):
             return {"error": "Access denied"}
-
         full_path.parent.mkdir(parents=True, exist_ok=True)
         full_path.write_text(content)
         return {"status": "written", "path": path, "size": len(content)}
 
     async def _run_command(self, command: str) -> Dict:
-        """Execute a shell command."""
         import asyncio
         try:
             proc = await asyncio.create_subprocess_shell(
@@ -264,11 +227,7 @@ class ToolRegistry:
                 stderr=asyncio.subprocess.PIPE,
             )
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
-            return {
-                "stdout": stdout.decode()[:3000],
-                "stderr": stderr.decode()[:1000],
-                "returncode": proc.returncode,
-            }
+            return {"stdout": stdout.decode()[:3000], "stderr": stderr.decode()[:1000], "returncode": proc.returncode}
         except asyncio.TimeoutError:
             return {"error": "Command timed out (30s)"}
         except Exception as e:
@@ -288,6 +247,20 @@ class ToolRegistry:
         from app.memory.manager import get_memory
         content = await get_memory().memory_get(file_path)
         return {"content": content}
+
+    async def _search_all_chats(self, query: str, limit: int = 5) -> Dict:
+        from app.memory.manager import get_memory
+        results = get_memory().search_all_chats(query, limit=limit)
+        if not results:
+            return {"message": "No matching chats found.", "results": []}
+        return {"results": results}
+
+    async def _get_chat_memory(self, chat_id: str) -> Dict:
+        from app.memory.manager import get_memory
+        content = get_memory().get_chat_memory(chat_id)
+        if not content:
+            return {"error": f"No memory found for chat {chat_id}"}
+        return {"chat_id": chat_id, "content": content}
 
 
 # Singleton
