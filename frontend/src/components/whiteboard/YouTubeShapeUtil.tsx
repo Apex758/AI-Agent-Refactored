@@ -33,7 +33,7 @@ function YouTubeShapeComponent({
   const handleClose = (e: React.PointerEvent) => {
     e.stopPropagation()
     activatedShapes.delete(shape.id) // clean up when frame is removed
-    editor.deleteShape(shape.id)
+    editor.deleteShapes([shape.id])
   }
 
   const handlePlay = (e: React.PointerEvent) => {
@@ -55,10 +55,12 @@ function YouTubeShapeComponent({
         background: '#0f0f0f',
         fontFamily: 'sans-serif',
         boxSizing: 'border-box',
+        pointerEvents: 'all',
       }}
     >
       {/* ── Title bar ── */}
       <div
+        onPointerDown={(e) => e.stopPropagation()}
         style={{
           height: TITLE_H,
           background: '#ff0000',
@@ -67,6 +69,7 @@ function YouTubeShapeComponent({
           justifyContent: 'space-between',
           padding: '0 10px',
           flexShrink: 0,
+          pointerEvents: 'all',
         }}
       >
         <span style={{ color: '#fff', fontWeight: 700, fontSize: 13, letterSpacing: 0.3 }}>
@@ -89,6 +92,7 @@ function YouTubeShapeComponent({
             fontWeight: 900,
             flexShrink: 0,
             lineHeight: 1,
+            pointerEvents: 'all',
           }}
         >
           ✕

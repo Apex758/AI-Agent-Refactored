@@ -6,6 +6,9 @@
 
 ## Important Facts
 
+- User likes cute cat pics
+
+
 - User wants pictures of cats
 
 

@@ -329,7 +329,7 @@ export default function Home() {
 
   // FIX 3: watch board mode for auto-collapse
   const { mode } = useUIStore()
-  const { placeYouTubeVideos } = useWhiteboardStore()
+  const { placeYouTubeVideos, placeScrapedMedia } = useWhiteboardStore()
 
   const currentMessages  = currentChatId ? (messagesByChatId[currentChatId] || []) : []
   const currentDocuments = currentChatId ? (documentsByChatId[currentChatId] || []) : []
@@ -397,6 +397,22 @@ export default function Home() {
     }
     if (seen.size > 0) placeYouTubeVideos([...seen])
   }, [currentMessages, placeYouTubeVideos])
+
+  // ── Auto-place images from agent responses on the whiteboard ───
+  useEffect(() => {
+    if (currentMessages.length === 0) return
+    const IMG_MD_RE = /!\[.*?\]\((https?:\/\/[^\s)]+)\)/g
+    const seen = new Set<string>()
+    for (const msg of currentMessages) {
+      if (msg.role !== 'assistant') continue
+      IMG_MD_RE.lastIndex = 0
+      let m: RegExpExecArray | null
+      while ((m = IMG_MD_RE.exec(msg.content)) !== null) seen.add(m[1])
+      // Also pick up images surfaced via the backend media scraper
+      msg.media?.images?.forEach(url => seen.add(url))
+    }
+    if (seen.size > 0) placeScrapedMedia([...seen], [])
+  }, [currentMessages, placeScrapedMedia])
 
   // ── General ────────────────────────────────────────────────────
   useEffect(() => { loadConfig(); loadChats() }, [])
