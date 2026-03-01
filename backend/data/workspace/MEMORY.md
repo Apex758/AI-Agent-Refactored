@@ -6,6 +6,24 @@
 
 ## Important Facts
 
+- User wants pictures of cats
+
+
+- User likes funny videos
+
+
+- User requests another funny video, prefers kids fails compilations
+
+
+- User enjoys cute puppy compilations
+
+
+- User likes funny puppy videos
+
+
+- User requests another puppy video, likes funny/cute puppy compilations
+
+
 - User wants to see a video of a puppy
 
 

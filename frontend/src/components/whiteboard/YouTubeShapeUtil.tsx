@@ -10,6 +10,10 @@ export type YouTubeShape = TLBaseShape<
 
 const TITLE_H = 36 // px — height of the red title-bar chrome
 
+// Module-level map: persists "activated" (clicked-to-play) state across
+// TLDraw re-mounts of the shape component (which would reset useState).
+const activatedShapes = new Map<string, boolean>()
+
 // ── Inner React component (needs hooks → separate from the util) ──
 function YouTubeShapeComponent({
   shape,
@@ -18,7 +22,8 @@ function YouTubeShapeComponent({
   shape: YouTubeShape
   editor: any
 }) {
-  const [activated, setActivated] = useState(false)
+  // Initialise from the persistent map so re-mounts don't reset playback
+  const [activated, setActivated] = useState(() => activatedShapes.get(shape.id) ?? false)
   const [thumbError, setThumbError] = useState(false)
 
   const { videoId, w, h } = shape.props
@@ -27,11 +32,13 @@ function YouTubeShapeComponent({
 
   const handleClose = (e: React.PointerEvent) => {
     e.stopPropagation()
+    activatedShapes.delete(shape.id) // clean up when frame is removed
     editor.deleteShape(shape.id)
   }
 
   const handlePlay = (e: React.PointerEvent) => {
     e.stopPropagation()
+    activatedShapes.set(shape.id, true) // persist across re-mounts
     setActivated(true)
   }
 
@@ -88,8 +95,14 @@ function YouTubeShapeComponent({
         </button>
       </div>
 
-      {/* ── Video / thumbnail area ── */}
-      <div style={{ flex: 1, position: 'relative', background: '#000', overflow: 'hidden' }}>
+      {/* ── Video / thumbnail area ──
+          stopPropagation prevents TLDraw from dragging the shape when the
+          user interacts with the video body — dragging is only possible via
+          the title bar above. */}
+      <div
+        style={{ flex: 1, position: 'relative', background: '#000', overflow: 'hidden' }}
+        onPointerDown={(e) => e.stopPropagation()}
+      >
         {activated ? (
           <iframe
             src={embedUrl}
