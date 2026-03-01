@@ -6,6 +6,9 @@
 
 ## Important Facts
 
+- User is interested in sleepy cats.
+
+
 - User likes cute cat pics
 
 

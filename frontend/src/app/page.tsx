@@ -315,6 +315,65 @@ function VoiceOrb({ isListening, isSpeaking }: { isListening: boolean; isSpeakin
   )
 }
 
+// ── Board link chips (shown below assistant messages) ─────────────
+function BoardLinkChips({
+  content,
+  media,
+  onOpen,
+}: {
+  content: string
+  media?: { images: string[]; videos: string[] }
+  onOpen: (key: string) => void
+}) {
+  const YT_RE = /(?:youtube\.com\/watch\?v=|youtu\.be\/)([a-zA-Z0-9_-]{11})/g
+  const IMG_RE = /!\[.*?\]\((https?:\/\/[^\s)]+)\)/g
+
+  const chips: Array<{ label: string; key: string }> = []
+  const seen = new Set<string>()
+  let m: RegExpExecArray | null
+
+  YT_RE.lastIndex = 0
+  while ((m = YT_RE.exec(content)) !== null) {
+    const key = `yt-${m[1]}`
+    if (!seen.has(key)) { seen.add(key); chips.push({ label: 'View Video on Board', key }) }
+  }
+  media?.videos?.forEach(id => {
+    const key = `yt-${id}`
+    if (!seen.has(key)) { seen.add(key); chips.push({ label: 'View Video on Board', key }) }
+  })
+
+  IMG_RE.lastIndex = 0
+  while ((m = IMG_RE.exec(content)) !== null) {
+    const key = `img-${m[1]}`
+    if (!seen.has(key)) { seen.add(key); chips.push({ label: 'View Image on Board', key }) }
+  }
+  media?.images?.forEach(url => {
+    const key = `img-${url}`
+    if (!seen.has(key)) { seen.add(key); chips.push({ label: 'View Image on Board', key }) }
+  })
+
+  if (chips.length === 0) return null
+  return (
+    <div className="flex flex-wrap gap-1.5 mt-1 max-w-[78%]">
+      {chips.map((chip, i) => (
+        <button
+          key={i}
+          onClick={() => onOpen(chip.key)}
+          className="text-xs px-2.5 py-1 rounded-full transition-opacity hover:opacity-75"
+          style={{
+            background: 'var(--bg-raised)',
+            border: '1px solid var(--border-strong)',
+            color: 'var(--vegas-gold)',
+            cursor: 'pointer',
+          }}
+        >
+          📌 {chip.label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
 // ── Main page ─────────────────────────────────────────────────────
 export default function Home() {
   const {
@@ -328,8 +387,8 @@ export default function Home() {
   } = useChatStore()
 
   // FIX 3: watch board mode for auto-collapse
-  const { mode } = useUIStore()
-  const { placeYouTubeVideos, placeScrapedMedia } = useWhiteboardStore()
+  const { mode, setMode } = useUIStore()
+  const { placeYouTubeVideos, placeScrapedMedia, focusOrPlaceMedia } = useWhiteboardStore()
 
   const currentMessages  = currentChatId ? (messagesByChatId[currentChatId] || []) : []
   const currentDocuments = currentChatId ? (documentsByChatId[currentChatId] || []) : []
@@ -748,6 +807,16 @@ export default function Home() {
                         <MessageContent content={msg.content} />
                       </div>
                       {msg.media && <MediaCard media={msg.media} />}
+                      {msg.role === 'assistant' && (
+                        <BoardLinkChips
+                          content={msg.content}
+                          media={msg.media}
+                          onOpen={(key) => {
+                            setMode('whiteboard')
+                            setTimeout(() => focusOrPlaceMedia(key), 250)
+                          }}
+                        />
+                      )}
                       {msg.role === 'assistant' && msg.citations && msg.citations.length > 0 && (
                         <div className="flex flex-wrap gap-1 mt-1.5 max-w-[78%]">
                           {msg.citations.map((c, i) => <CitationBadge key={i} citation={c} />)}

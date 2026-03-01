@@ -58,9 +58,10 @@ function YouTubeShapeComponent({
         pointerEvents: 'all',
       }}
     >
-      {/* ── Title bar ── */}
+      {/* ── Title bar ── Let TLDraw receive these events so the shape stays
+          draggable/selectable/resizable. The close button stops propagation
+          in its own handler, which is enough for that one interaction. */}
       <div
-        onPointerDown={(e) => e.stopPropagation()}
         style={{
           height: TITLE_H,
           background: '#ff0000',

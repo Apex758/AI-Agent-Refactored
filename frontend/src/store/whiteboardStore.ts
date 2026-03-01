@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import type { Editor } from 'tldraw'
+import { createShapeId } from 'tldraw'
 import type { ScenePlan } from '@/components/whiteboard/types'
 
 interface WhiteboardStore {
@@ -17,6 +18,7 @@ interface WhiteboardStore {
   placeYouTubeVideos: (videoIds: string[]) => void
   placedMediaIds: string[]  // Track already-placed media to avoid duplicates
   clearPlacedMedia: () => void
+  focusOrPlaceMedia: (key: string) => void
 }
 
 export const useWhiteboardStore = create<WhiteboardStore>((set, get) => ({
@@ -179,40 +181,33 @@ export const useWhiteboardStore = create<WhiteboardStore>((set, get) => ({
 
   placeScrapedMedia: (images: string[], videoIds: string[]) => {
     const { editorRef, placedMediaIds } = get()
-    console.log('[DEBUG placeScrapedMedia] editorRef:', !!editorRef, 'images:', images.length, 'videos:', videoIds.length)
-    if (!editorRef) {
-      console.log('[DEBUG placeScrapedMedia] No editorRef!')
-      return
-    }
+    if (!editorRef) return
     if (images.length === 0 && videoIds.length === 0) return
 
-    // Generate a unique ID for this media batch to prevent duplicates
-    const mediaId = `media-${images.join(',')}-${videoIds.join(',')}`
-    if (placedMediaIds.includes(mediaId)) {
-      console.log('[DEBUG placeScrapedMedia] Already placed, skipping')
-      return
-    }
-    
-    // Mark this media as placed
-    set(s => ({ placedMediaIds: [...s.placedMediaIds, mediaId] }))
-    console.log('[DEBUG placeScrapedMedia] Placing media now...')
+    // Deduplicate per individual URL (not per batch)
+    const newImages = images.filter(url => !placedMediaIds.includes(`img-${url}`))
+    if (newImages.length === 0) return
+
+    set(s => ({ placedMediaIds: [...s.placedMediaIds, ...newImages.map(url => `img-${url}`)] }))
 
     const viewportBounds = editorRef.getViewportScreenBounds()
     const topLeft = editorRef.screenToPage({ x: viewportBounds.x, y: viewportBounds.y })
 
-    // Place images in a row starting from the top-left of the viewport
     const IMG_W = 240
     const IMG_H = 180
     const GAP = 16
 
-    images.slice(0, 6).forEach((src, i) => {
-      const assetId = `asset:scraped-img-${Date.now()}-${i}` as any
+    newImages.slice(0, 6).forEach((src, i) => {
+      // Deterministic IDs so focusOrPlaceMedia can locate the shape later
+      const urlKey = encodeURIComponent(src).slice(0, 50)
+      const shapeId = createShapeId('img-' + urlKey)
+      const assetId = `asset:img-${urlKey}` as any
       editorRef.createAssets([{
         id: assetId,
         type: 'image',
         typeName: 'asset',
         props: {
-          name: `scraped-${i}`,
+          name: `img-${i}`,
           src,
           w: IMG_W,
           h: IMG_H,
@@ -222,35 +217,36 @@ export const useWhiteboardStore = create<WhiteboardStore>((set, get) => ({
         meta: {},
       }])
       editorRef.createShape({
+        id: shapeId,
         type: 'image',
         x: topLeft.x + i * (IMG_W + GAP),
         y: topLeft.y + 40,
         props: { assetId, w: IMG_W, h: IMG_H },
       })
     })
-
   },
 
   placeYouTubeVideos: (videoIds: string[]) => {
     const { editorRef, placedMediaIds } = get()
     if (!editorRef) return
 
-    // Filter out already-placed video IDs
     const newIds = videoIds.filter(id => !placedMediaIds.includes(`yt-${id}`))
     if (newIds.length === 0) return
 
-    // Mark as placed to prevent duplicates on re-renders
     set(s => ({ placedMediaIds: [...s.placedMediaIds, ...newIds.map(id => `yt-${id}`)] }))
 
     const viewportBounds = editorRef.getViewportScreenBounds()
     const topLeft = editorRef.screenToPage({ x: viewportBounds.x, y: viewportBounds.y })
 
     const W = 480
-    const H = 306 // 36px titlebar + 270px 16:9 video
+    const H = 306
     const GAP = 20
 
     newIds.forEach((videoId, i) => {
+      // Deterministic ID so focusOrPlaceMedia can locate the shape later
+      const shapeId = createShapeId('yt-' + videoId)
       editorRef.createShape({
+        id: shapeId,
         type: 'youtube',
         x: topLeft.x + i * (W + GAP),
         y: topLeft.y + 40,
@@ -260,4 +256,36 @@ export const useWhiteboardStore = create<WhiteboardStore>((set, get) => ({
   },
 
   clearPlacedMedia: () => set({ placedMediaIds: [] }),
+
+  focusOrPlaceMedia: (key: string) => {
+    const { editorRef } = get()
+    if (!editorRef) return
+
+    if (key.startsWith('yt-')) {
+      const videoId = key.slice(3)
+      const shapeId = createShapeId('yt-' + videoId)
+      const shape = editorRef.getShape(shapeId)
+      if (shape) {
+        editorRef.setSelectedShapes([shapeId])
+        editorRef.zoomToSelection()
+      } else {
+        // Shape was deleted — allow re-placement then place
+        set(s => ({ placedMediaIds: s.placedMediaIds.filter(id => id !== `yt-${videoId}`) }))
+        get().placeYouTubeVideos([videoId])
+      }
+    } else if (key.startsWith('img-')) {
+      const url = key.slice(4)
+      const urlKey = encodeURIComponent(url).slice(0, 50)
+      const shapeId = createShapeId('img-' + urlKey)
+      const shape = editorRef.getShape(shapeId)
+      if (shape) {
+        editorRef.setSelectedShapes([shapeId])
+        editorRef.zoomToSelection()
+      } else {
+        // Shape was deleted — allow re-placement then place
+        set(s => ({ placedMediaIds: s.placedMediaIds.filter(id => id !== `img-${url}`) }))
+        get().placeScrapedMedia([url], [])
+      }
+    }
+  },
 }))
