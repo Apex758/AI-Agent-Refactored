@@ -1,16 +1,278 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,300&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
+:root {
+  /* ── Palette from image ── */
+  --pastel-gray:   #d1ccc8;
+  --vegas-gold:    #c4b25e;
+  --seal-brown:    #581f0b;
+  --khaki:         #c9b79b;
+  --emerald:       #2d6a4f;
+  --emerald-light: #3a8a65;
+  --emerald-dark:  #1e4d38;
+
+  /* ── Derived tones ── */
+  --bg-main:       #cbc5c0;          /* slightly darker pastel gray */
+  --bg-surface:    #d8d3cf;          /* lighter card surface        */
+  --bg-raised:     #e2ddda;          /* hover / raised elements     */
+  --text-primary:  #2a1a10;          /* near-black warm             */
+  --text-secondary:#5c4a3a;          /* mid-brown                   */
+  --text-muted:    #8a7060;          /* muted warm gray             */
+  --text-inverse:  #f5f0eb;          /* text on dark surfaces       */
+  --border:        rgba(88,31,11,.12);
+  --border-strong: rgba(88,31,11,.22);
+
+  /* ── Gold accent states ── */
+  --gold-hover:    #b5a050;
+  --gold-muted:    rgba(196,178,94,.18);
+  --gold-border:   rgba(196,178,94,.35);
+}
+
+/* ── Base reset ── */
+*, *::before, *::after { box-sizing: border-box; }
+
+html { height: 100%; }
+
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-family: 'DM Sans', -apple-system, sans-serif;
+  font-weight: 400;
+  background: var(--bg-main);
+  color: var(--text-primary);
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+  letter-spacing: -0.01em;
 }
 
-.scrollbar-thin::-webkit-scrollbar { width: 4px; }
-.scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
-.scrollbar-thin::-webkit-scrollbar-thumb { background: #374151; border-radius: 2px; }
+/* ── Scrollbars ── */
+::-webkit-scrollbar          { width: 4px; height: 4px; }
+::-webkit-scrollbar-track    { background: transparent; }
+::-webkit-scrollbar-thumb    { background: var(--khaki); border-radius: 99px; }
+::-webkit-scrollbar-thumb:hover { background: var(--seal-brown); }
 
+/* ── Selection ── */
+::selection {
+  background: var(--gold-muted);
+  color: var(--text-primary);
+}
+
+/* ── Typography helpers ── */
+.font-display { font-family: 'DM Serif Display', serif; }
+
+/* ── Sidebar (emerald) ── */
+.sidebar {
+  background: var(--emerald);
+  color: var(--text-inverse);
+}
+
+.sidebar-item {
+  color: rgba(245,240,235,.65);
+  border-radius: 10px;
+  transition: background 0.15s, color 0.15s;
+}
+
+.sidebar-item:hover {
+  background: rgba(255,255,255,.1);
+  color: var(--text-inverse);
+}
+
+.sidebar-item.active {
+  background: rgba(255,255,255,.15);
+  color: var(--text-inverse);
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.12);
+}
+
+/* ── Chat bubble ── */
+.bubble-user {
+  background: var(--seal-brown);
+  color: var(--text-inverse);
+  border-radius: 18px 18px 4px 18px;
+}
+
+.bubble-assistant {
+  background: var(--bg-raised);
+  color: var(--text-primary);
+  border-radius: 18px 18px 18px 4px;
+  border: 1px solid var(--border);
+}
+
+/* ── Input ── */
+.chat-input {
+  background: var(--bg-raised);
+  border: 1.5px solid var(--border-strong);
+  color: var(--text-primary);
+  border-radius: 14px;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.chat-input::placeholder { color: var(--text-muted); }
+
+.chat-input:focus {
+  outline: none;
+  border-color: var(--vegas-gold);
+  box-shadow: 0 0 0 3px var(--gold-muted);
+}
+
+/* ── Send button ── */
+.btn-send {
+  background: var(--seal-brown);
+  color: var(--text-inverse);
+  border-radius: 12px;
+  font-weight: 500;
+  transition: background 0.15s, transform 0.1s;
+}
+
+.btn-send:hover:not(:disabled) {
+  background: #6b2710;
+  transform: translateY(-1px);
+}
+
+.btn-send:active:not(:disabled) { transform: translateY(0); }
+
+.btn-send:disabled {
+  background: var(--khaki);
+  color: var(--text-muted);
+  cursor: not-allowed;
+}
+
+/* ── Header ── */
+.chat-header {
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border);
+  backdrop-filter: blur(8px);
+}
+
+/* ── Document panel ── */
+.doc-panel {
+  background: var(--emerald-dark);
+  color: var(--text-inverse);
+  border-left: 1px solid rgba(255,255,255,.08);
+}
+
+.doc-item {
+  background: rgba(255,255,255,.07);
+  border-radius: 10px;
+  transition: background 0.15s;
+}
+
+.doc-item:hover { background: rgba(255,255,255,.13); }
+
+/* ── Drop zone ── */
+.drop-zone {
+  border: 2px dashed rgba(255,255,255,.25);
+  border-radius: 12px;
+  transition: border-color 0.15s, background 0.15s;
+  cursor: pointer;
+}
+
+.drop-zone:hover,
+.drop-zone.dragging {
+  border-color: var(--vegas-gold);
+  background: rgba(196,178,94,.1);
+}
+
+/* ── Modal ── */
+.modal-backdrop {
+  background: rgba(42,26,16,.55);
+  backdrop-filter: blur(6px);
+}
+
+.modal-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 20px;
+  box-shadow: 0 24px 60px rgba(42,26,16,.25);
+}
+
+/* ── Citation badge ── */
+.citation-badge {
+  background: var(--gold-muted);
+  border: 1px solid var(--gold-border);
+  color: var(--seal-brown);
+  border-radius: 99px;
+  font-size: 11px;
+  padding: 2px 9px;
+  font-weight: 500;
+}
+
+.citation-badge-cross {
+  background: rgba(88,31,11,.1);
+  border-color: rgba(88,31,11,.2);
+  color: var(--seal-brown);
+}
+
+/* ── Header buttons ── */
+.btn-outline {
+  border: 1.5px solid var(--border-strong);
+  color: var(--text-secondary);
+  border-radius: 9px;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+  background: transparent;
+}
+
+.btn-outline:hover {
+  background: var(--bg-raised);
+  color: var(--text-primary);
+  border-color: var(--vegas-gold);
+}
+
+/* ── Empty state ── */
+.empty-state {
+  color: var(--text-muted);
+}
+
+/* ── Typing dots ── */
 @keyframes pulse-dot {
-  0%, 80%, 100% { opacity: 0.3; }
-  40% { opacity: 1; }
+  0%, 80%, 100% { opacity: 0.25; transform: scale(0.85); }
+  40%            { opacity: 1;    transform: scale(1); }
 }
+
+.typing-dot {
+  width: 7px; height: 7px;
+  background: var(--text-muted);
+  border-radius: 50%;
+  display: inline-block;
+}
+
+/* ── Streaming cursor ── */
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0; }
+}
+
+.stream-cursor {
+  display: inline-block;
+  width: 2px; height: 1em;
+  background: var(--seal-brown);
+  vertical-align: text-bottom;
+  margin-left: 2px;
+  animation: blink 0.9s ease-in-out infinite;
+}
+
+/* ── Sidebar collapse transition ── */
+.sidebar-collapse {
+  transition: width 0.22s cubic-bezier(0.4,0,0.2,1),
+              opacity 0.18s ease;
+}
+
+.sidebar-collapse.collapsed {
+  width: 0 !important;
+  opacity: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+/* ── Gold accent line on active chat ── */
+.chat-active-indicator {
+  width: 3px;
+  background: var(--vegas-gold);
+  border-radius: 99px;
+  flex-shrink: 0;
+}
+
+/* ── Scrollbar thin utility ── */
+.scrollbar-thin::-webkit-scrollbar       { width: 4px; }
+.scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
+.scrollbar-thin::-webkit-scrollbar-thumb { background: rgba(255,255,255,.2); border-radius: 2px; }

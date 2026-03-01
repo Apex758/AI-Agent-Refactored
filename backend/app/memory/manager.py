@@ -7,6 +7,8 @@ Architecture:
   - ChromaDB: all vector search — memories, file chunks, document chunks
   - DocumentProcessor: handles file ingestion
 """
+
+
 import json
 import hashlib
 import sqlite3

@@ -107,7 +107,7 @@ class Gateway:
             yield {"type": "token", "content": token}
 
         self.memory.save_message(client_id, "assistant", full_response)
-        await self.memory.auto_capture(message, full_response, client_id)
+        asyncio.create_task(self.memory.auto_capture(message, full_response, client_id)) 
 
     async def _agent_loop(
         self,
