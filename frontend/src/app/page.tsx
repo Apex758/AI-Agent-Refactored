@@ -3,7 +3,52 @@
 import { useState, useRef, useEffect, FormEvent, useCallback } from 'react'
 import { useChatStore } from '@/store/chatStore'
 import { useWebSocket } from '@/hooks/useWebSocket'
+import { useVoice } from '@/hooks/useVoice'
 import type { Document, Citation } from '@/types'
+
+// ── URL → clickable links ─────────────────────────────────────────
+function MessageContent({ content }: { content: string }) {
+  const URL_RE = /https?:\/\/[^\s)>\]"']+/g
+  const parts: Array<{ type: 'text' | 'url'; value: string }> = []
+  let last = 0
+  let match: RegExpExecArray | null
+
+  while ((match = URL_RE.exec(content)) !== null) {
+    if (match.index > last) parts.push({ type: 'text', value: content.slice(last, match.index) })
+    parts.push({ type: 'url', value: match[0] })
+    last = URL_RE.lastIndex
+  }
+  if (last < content.length) parts.push({ type: 'text', value: content.slice(last) })
+
+  return (
+    <>
+      {parts.map((p, i) => {
+        if (p.type === 'url') {
+          let label = p.value
+          try {
+            const u = new URL(p.value)
+            const path = u.pathname !== '/' ? u.pathname.replace(/\/$/, '').split('/').pop() || '' : ''
+            label = u.hostname.replace(/^www\./, '') + (path ? `/${path}` : '')
+            if (label.length > 40) label = label.slice(0, 38) + '…'
+          } catch { /* keep raw url */ }
+          return (
+            <a
+              key={i}
+              href={p.value}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline underline-offset-2 font-medium transition-opacity hover:opacity-80"
+              style={{ color: 'var(--vegas-gold)' }}
+            >
+              {label} ↗
+            </a>
+          )
+        }
+        return <span key={i}>{p.value}</span>
+      })}
+    </>
+  )
+}
 
 // ── File type icons ───────────────────────────────────────────────
 function FileIcon({ filename }: { filename: string }) {
@@ -72,18 +117,13 @@ function DocumentPanel({
 
   return (
     <div className="doc-panel flex flex-col h-full">
-      {/* Header */}
       <div className="px-3 pt-4 pb-3" style={{ borderBottom: '1px solid rgba(255,255,255,.08)' }}>
-        <p
-          className="font-display text-xs uppercase"
-          style={{ color: 'var(--vegas-gold)', letterSpacing: '0.12em' }}
-        >
+        <p className="font-display text-xs uppercase" style={{ color: 'var(--vegas-gold)', letterSpacing: '0.12em' }}>
           Documents
         </p>
         <p className="text-xs mt-0.5" style={{ color: 'rgba(245,240,235,.4)' }}>Linked to this chat</p>
       </div>
 
-      {/* Drop zone */}
       <div className="px-2 pt-3">
         <div
           onDrop={handleDrop}
@@ -108,7 +148,6 @@ function DocumentPanel({
         />
       </div>
 
-      {/* Document list */}
       <div className="flex-1 overflow-y-auto scrollbar-thin px-2 pt-2 pb-3 space-y-1.5 mt-1">
         {documents.length === 0 && (
           <p className="text-xs text-center mt-6" style={{ color: 'rgba(245,240,235,.25)' }}>
@@ -124,11 +163,7 @@ function DocumentPanel({
               <FileIcon filename={doc.filename} />
             </div>
             <div className="flex-1 min-w-0">
-              <p
-                className="text-xs truncate font-medium"
-                style={{ color: 'var(--text-inverse)' }}
-                title={doc.filename}
-              >
+              <p className="text-xs truncate font-medium" style={{ color: 'var(--text-inverse)' }} title={doc.filename}>
                 {doc.filename}
               </p>
               <p className="text-xs" style={{ color: 'rgba(245,240,235,.4)' }}>
@@ -150,6 +185,64 @@ function DocumentPanel({
   )
 }
 
+// ── Voice indicator ───────────────────────────────────────────────
+function VoiceOrb({ isListening, isSpeaking }: { isListening: boolean; isSpeaking: boolean }) {
+  if (!isListening && !isSpeaking) return null
+  return (
+    <div
+      className="fixed bottom-24 left-1/2 -translate-x-1/2 z-50 flex flex-col items-center gap-2 pointer-events-none"
+    >
+      <div
+        className="relative flex items-center justify-center"
+        style={{ width: 64, height: 64 }}
+      >
+        {/* Pulse rings */}
+        {[0, 1, 2].map(i => (
+          <div
+            key={i}
+            className="absolute rounded-full"
+            style={{
+              width: 64 + i * 20,
+              height: 64 + i * 20,
+              border: `2px solid ${isListening ? 'rgba(220,60,60,.4)' : 'rgba(196,178,94,.35)'}`,
+              animation: `pulse-ring 1.5s ease-out ${i * 0.4}s infinite`,
+            }}
+          />
+        ))}
+        <div
+          className="relative w-14 h-14 rounded-full flex items-center justify-center text-2xl"
+          style={{
+            background: isListening ? 'rgba(200,50,50,.9)' : 'rgba(196,178,94,.85)',
+            backdropFilter: 'blur(8px)',
+            boxShadow: isListening
+              ? '0 0 20px rgba(220,60,60,.5)'
+              : '0 0 20px rgba(196,178,94,.4)',
+          }}
+        >
+          {isListening ? '🎙️' : '🔊'}
+        </div>
+      </div>
+      <p
+        className="text-xs font-medium rounded-full px-3 py-1"
+        style={{
+          background: 'rgba(42,26,16,.7)',
+          color: isListening ? 'rgba(255,130,120,1)' : 'var(--vegas-gold)',
+          backdropFilter: 'blur(8px)',
+          border: '1px solid rgba(255,255,255,.08)',
+        }}
+      >
+        {isListening ? 'Listening…' : 'Speaking…'}
+      </p>
+      <style>{`
+        @keyframes pulse-ring {
+          0%   { transform: scale(0.9); opacity: 0.8; }
+          100% { transform: scale(1.4); opacity: 0; }
+        }
+      `}</style>
+    </div>
+  )
+}
+
 // ── Main page ─────────────────────────────────────────────────────
 export default function Home() {
   const {
@@ -161,27 +254,58 @@ export default function Home() {
     uploadDocument, deleteDocument,
   } = useChatStore()
 
-  const currentMessages = currentChatId ? (messagesByChatId[currentChatId] || []) : []
-  const currentDocuments = currentChatId ? (documentsByChatId[currentChatId] || []) : []
-  const { send } = useWebSocket(currentChatId || '')
+  const currentMessages   = currentChatId ? (messagesByChatId[currentChatId] || []) : []
+  const currentDocuments  = currentChatId ? (documentsByChatId[currentChatId] || []) : []
+  const { send }          = useWebSocket(currentChatId || '')
 
-  const [input, setInput] = useState('')
-  const [showMemory, setShowMemory] = useState(false)
+  const [input, setInput]                 = useState('')
+  const [showMemory, setShowMemory]       = useState(false)
   const [memoryContent, setMemoryContent] = useState('')
   const [editingChatId, setEditingChatId] = useState<string | null>(null)
-  const [editName, setEditName] = useState('')
-  const [sidebarOpen, setSidebarOpen] = useState(true)
-  const [docPanelOpen, setDocPanelOpen] = useState(true)
-  const [uploadError, setUploadError] = useState<string | null>(null)
+  const [editName, setEditName]           = useState('')
+  const [sidebarOpen, setSidebarOpen]     = useState(true)
+  const [docPanelOpen, setDocPanelOpen]   = useState(true)
+  const [uploadError, setUploadError]     = useState<string | null>(null)
+  const [voiceEnabled, setVoiceEnabled]   = useState(false)
 
-  const bottomRef = useRef<HTMLDivElement>(null)
-  const editInputRef = useRef<HTMLInputElement>(null)
+  const bottomRef      = useRef<HTMLDivElement>(null)
+  const editInputRef   = useRef<HTMLInputElement>(null)
+  const lastSpokenId   = useRef<string | null>(null)
+  const callbackRef    = useRef<(text: string) => void>(() => {})
 
+  // ── Voice ──────────────────────────────────────────────────────
+  // Keep a stable callback ref so useVoice's closure stays fresh
+  const voice = useVoice(useCallback((text: string) => callbackRef.current(text), []))
+
+  useEffect(() => {
+    callbackRef.current = (text: string) => {
+      if (!currentChatId || isProcessing) return
+      setInput('')
+      sendMessage(text)
+      send(text)
+    }
+  }, [currentChatId, isProcessing, sendMessage, send])
+
+  // Auto-speak new assistant messages
+  useEffect(() => {
+    if (!voiceEnabled) return
+    const last = currentMessages[currentMessages.length - 1]
+    if (last?.role === 'assistant' && last.id !== lastSpokenId.current) {
+      lastSpokenId.current = last.id
+      voice.speak(last.content)
+    }
+  }, [currentMessages, voiceEnabled, voice])
+
+  // Show interim transcript in input while listening
+  useEffect(() => {
+    if (voice.interimText) setInput(voice.interimText)
+  }, [voice.interimText])
+
+  // ── General ────────────────────────────────────────────────────
   useEffect(() => { loadConfig(); loadChats() }, [])
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [currentMessages, streamingContent])
   useEffect(() => { if (editingChatId) editInputRef.current?.focus() }, [editingChatId])
 
-  // ── Auto-collapse: clicking the chat backdrop collapses both sidebars ──
   const handleChatAreaClick = useCallback((e: React.MouseEvent) => {
     const target = e.target as HTMLElement
     if (
@@ -200,6 +324,8 @@ export default function Home() {
   const handleSend = (e: FormEvent) => {
     e.preventDefault()
     if (!input.trim() || isProcessing || !currentChatId) return
+    // Stop TTS when user sends a new message
+    voice.stopSpeaking()
     sendMessage(input.trim())
     send(input.trim())
     setInput('')
@@ -249,8 +375,40 @@ export default function Home() {
     return d.toLocaleDateString([], { month: 'short', day: 'numeric' })
   }
 
+  const handleMicClick = () => {
+    if (voice.isListening) {
+      voice.stopListening()
+    } else if (voice.isSpeaking) {
+      voice.stopSpeaking()
+    } else {
+      setVoiceEnabled(true)
+      voice.startListening()
+    }
+  }
+
   return (
     <main className="flex h-screen overflow-hidden" style={{ background: 'var(--bg-main)' }}>
+
+      {/* ── Hover-to-open sentinel — left edge ── */}
+      {!sidebarOpen && (
+        <div
+          className="fixed left-0 top-0 h-full z-50"
+          style={{ width: 12 }}
+          onMouseEnter={() => setSidebarOpen(true)}
+        />
+      )}
+
+      {/* ── Hover-to-open sentinel — right edge ── */}
+      {!docPanelOpen && currentChatId && (
+        <div
+          className="fixed right-0 top-0 h-full z-50"
+          style={{ width: 12 }}
+          onMouseEnter={() => setDocPanelOpen(true)}
+        />
+      )}
+
+      {/* ── Voice orb ── */}
+      <VoiceOrb isListening={voice.isListening} isSpeaking={voice.isSpeaking} />
 
       {/* ── Left sidebar (emerald) ── */}
       <aside
@@ -311,11 +469,7 @@ export default function Home() {
                     }}
                     onClick={e => e.stopPropagation()}
                     className="flex-1 text-xs rounded px-1.5 py-0.5 outline-none"
-                    style={{
-                      background: 'rgba(255,255,255,.15)',
-                      color: 'var(--text-inverse)',
-                      border: 'none',
-                    }}
+                    style={{ background: 'rgba(255,255,255,.15)', color: 'var(--text-inverse)', border: 'none' }}
                   />
                 ) : (
                   <>
@@ -351,14 +505,10 @@ export default function Home() {
       </aside>
 
       {/* ── Center: Chat area ── */}
-      <div
-        className="flex-1 flex flex-col min-w-0"
-        onClick={handleChatAreaClick}
-      >
+      <div className="flex-1 flex flex-col min-w-0" onClick={handleChatAreaClick}>
+
         {/* Header */}
-        <header
-          className="chat-header flex items-center justify-between px-5 py-3 flex-shrink-0 z-10"
-        >
+        <header className="chat-header flex items-center justify-between px-5 py-3 flex-shrink-0 z-10">
           <div className="flex items-center gap-3">
             <button
               onClick={e => { e.stopPropagation(); setSidebarOpen(o => !o) }}
@@ -438,7 +588,7 @@ export default function Home() {
           ) : currentMessages.length === 0 && !streamingContent ? (
             <div className="flex items-center justify-center h-full">
               <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
-                Send a message to start...
+                Send a message to start…
               </p>
             </div>
           ) : (
@@ -457,7 +607,7 @@ export default function Home() {
                         : 'bubble-assistant'
                     }`}
                   >
-                    {msg.content}
+                    <MessageContent content={msg.content} />
                   </div>
                   {msg.role === 'assistant' && msg.citations && msg.citations.length > 0 && (
                     <div className="flex flex-wrap gap-1 mt-1.5 max-w-[78%]">
@@ -470,7 +620,7 @@ export default function Home() {
               {streamingContent && (
                 <div className="flex flex-col items-start">
                   <div className="bubble-assistant max-w-[78%] px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap">
-                    {streamingContent}
+                    <MessageContent content={streamingContent} />
                     <span className="stream-cursor" />
                   </div>
                 </div>
@@ -523,20 +673,82 @@ export default function Home() {
               {uploadError}
             </p>
           )}
-          <div className="flex gap-3">
+          <div className="flex gap-2 items-center">
             <input
               value={input}
               onChange={e => setInput(e.target.value)}
               placeholder={
-                currentChatId ? `Message ${agentName}...` : 'Create or select a chat first'
+                voice.isListening
+                  ? 'Listening…'
+                  : currentChatId
+                  ? `Message ${agentName}…`
+                  : 'Create or select a chat first'
               }
               disabled={isProcessing || !currentChatId}
               className="chat-input flex-1 px-4 py-3 text-sm disabled:opacity-50"
+              style={voice.isListening ? { borderColor: 'rgba(220,60,60,.6)', boxShadow: '0 0 0 3px rgba(220,60,60,.12)' } : {}}
             />
+
+            {/* Mic button */}
+            {voice.supported && currentChatId && (
+              <button
+                type="button"
+                onClick={handleMicClick}
+                disabled={isProcessing && !voice.isListening && !voice.isSpeaking}
+                className="flex-shrink-0 w-11 h-11 flex items-center justify-center rounded-xl transition-all text-lg"
+                title={
+                  voice.isListening ? 'Stop listening'
+                  : voice.isSpeaking ? 'Stop speaking'
+                  : 'Voice input'
+                }
+                style={{
+                  background: voice.isListening
+                    ? 'rgba(200,50,50,.9)'
+                    : voice.isSpeaking
+                    ? 'rgba(196,178,94,.85)'
+                    : 'var(--bg-raised)',
+                  border: `1.5px solid ${
+                    voice.isListening ? 'rgba(220,60,60,.6)'
+                    : voice.isSpeaking ? 'var(--gold-border)'
+                    : 'var(--border-strong)'
+                  }`,
+                  color: (voice.isListening || voice.isSpeaking) ? '#fff' : 'var(--text-muted)',
+                  boxShadow: voice.isListening
+                    ? '0 0 12px rgba(220,60,60,.4)'
+                    : voice.isSpeaking
+                    ? '0 0 12px rgba(196,178,94,.3)'
+                    : 'none',
+                }}
+              >
+                {voice.isListening ? '⏹' : voice.isSpeaking ? '🔊' : '🎙️'}
+              </button>
+            )}
+
+            {/* Voice auto-speak toggle */}
+            {voice.supported && currentChatId && (
+              <button
+                type="button"
+                onClick={() => {
+                  const next = !voiceEnabled
+                  setVoiceEnabled(next)
+                  if (!next) voice.stopSpeaking()
+                }}
+                className="flex-shrink-0 w-11 h-11 flex items-center justify-center rounded-xl transition-all text-xs font-semibold"
+                title={voiceEnabled ? 'Disable auto-speak' : 'Enable auto-speak'}
+                style={{
+                  background: voiceEnabled ? 'var(--gold-muted)' : 'var(--bg-raised)',
+                  border: `1.5px solid ${voiceEnabled ? 'var(--gold-border)' : 'var(--border-strong)'}`,
+                  color: voiceEnabled ? 'var(--seal-brown)' : 'var(--text-muted)',
+                }}
+              >
+                {voiceEnabled ? '🔈' : '🔇'}
+              </button>
+            )}
+
             <button
               type="submit"
               disabled={isProcessing || !input.trim() || !currentChatId}
-              className="btn-send px-6 py-3 text-sm"
+              className="btn-send px-6 py-3 text-sm flex-shrink-0"
             >
               Send
             </button>
