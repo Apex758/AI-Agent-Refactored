@@ -10,6 +10,7 @@ from app.core.logging import logger
 from app.api.routes import router as api_router
 from app.api.chats import router as chats_router
 from app.api.documents import router as documents_router
+from app.api.webrtc import webrtc_websocket_endpoint
 from app.channels.whatsapp import router as whatsapp_router, is_enabled as whatsapp_enabled
 from app.skills.loader import SkillLoader
 
@@ -28,6 +29,11 @@ def create_app() -> FastAPI:
     app.include_router(api_router, prefix="/api", tags=["agent"])
     app.include_router(chats_router, prefix="/api/chats", tags=["chats"])
     app.include_router(documents_router, prefix="/api/documents", tags=["documents"])
+
+    # WebRTC WebSocket endpoint for TTS
+    @app.websocket("/webrtc")
+    async def websocket_webrtc(websocket):
+        await webrtc_websocket_endpoint(websocket)
 
     if whatsapp_enabled():
         app.include_router(whatsapp_router, prefix="/api/whatsapp", tags=["whatsapp"])

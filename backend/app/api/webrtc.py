@@ -1,8 +1,12 @@
 """WebRTC Signaling Handler for real-time voice."""
+import base64
 import json
 import logging
 from typing import Dict
 from fastapi import WebSocket, WebSocketDisconnect
+from fastapi.responses import Response
+
+from app.tts import speech_service
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +50,8 @@ class WebRTCHandler:
             await self.handle_ice_candidate(client_id, message)
         elif msg_type == "audio":
             await self.handle_audio(client_id, message)
+        elif msg_type == "tts":
+            await self.handle_tts(client_id, message)
         else:
             logger.warning(f"Unknown message type: {msg_type}")
     
@@ -79,6 +85,43 @@ class WebRTCHandler:
         """Handle incoming audio data from client."""
         audio_data = message.get("data")
         # Forward audio to realtime model for processing
+    
+    async def handle_tts(self, client_id: str, message: dict):
+        """Handle TTS request - synthesize speech and send back via WebSocket."""
+        text = message.get("text", "")
+        speed = message.get("speed", 1.0)
+        
+        if not text:
+            websocket = self.active_connections.get(client_id)
+            if websocket:
+                await websocket.send_json({
+                    "type": "tts_error",
+                    "message": "No text provided"
+                })
+            return
+        
+        try:
+            # Synthesize speech
+            audio_data = await speech_service.synthesize(text, speed=speed)
+            
+            # Send audio back as base64
+            audio_b64 = base64.b64encode(audio_data).decode("utf-8")
+            
+            websocket = self.active_connections.get(client_id)
+            if websocket:
+                await websocket.send_json({
+                    "type": "tts_audio",
+                    "audio": audio_b64,
+                    "format": "wav"
+                })
+        except Exception as e:
+            logger.error(f"TTS failed: {e}")
+            websocket = self.active_connections.get(client_id)
+            if websocket:
+                await websocket.send_json({
+                    "type": "tts_error",
+                    "message": str(e)
+                })
 
 
 # Global WebRTC handler

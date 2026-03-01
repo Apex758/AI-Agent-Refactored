@@ -21,6 +21,8 @@ export function useVoice(onFinalTranscript: (text: string) => void): UseVoiceRet
   const recRef      = useRef<any>(null)
   const synthRef    = useRef<SpeechSynthesis | null>(null)
   const callbackRef = useRef(onFinalTranscript)
+  const wsRef       = useRef<WebSocket | null>(null)
+  const audioRef    = useRef<HTMLAudioElement | null>(null)
 
   // Keep callback ref fresh so startListening closure never goes stale
   useEffect(() => { callbackRef.current = onFinalTranscript }, [onFinalTranscript])
@@ -32,18 +34,79 @@ export function useVoice(onFinalTranscript: (text: string) => void): UseVoiceRet
     synthRef.current = window.speechSynthesis ?? null
   }, [])
 
+  // Initialize WebSocket connection for server-side TTS
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    
+    const wsUrl = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000'
+    const ws = new WebSocket(`${wsUrl}/webrtc`)
+    
+    ws.onopen = () => {
+      console.log('TTS WebSocket connected')
+    }
+    
+    ws.onmessage = async (event) => {
+      const message = JSON.parse(event.data)
+      
+      if (message.type === 'tts_audio') {
+        // Decode base64 audio and play
+        const audioBytes = Uint8Array.from(atob(message.audio), c => c.charCodeAt(0))
+        const blob = new Blob([audioBytes], { type: 'audio/wav' })
+        const url = URL.createObjectURL(blob)
+        
+        if (audioRef.current) {
+          audioRef.current.pause()
+        }
+        
+        const audio = new Audio(url)
+        audioRef.current = audio
+        
+        audio.onplay = () => setIsSpeaking(true)
+        audio.onended = () => {
+          setIsSpeaking(false)
+          URL.revokeObjectURL(url)
+        }
+        audio.onerror = () => {
+          setIsSpeaking(false)
+          URL.revokeObjectURL(url)
+        }
+        
+        await audio.play()
+      } else if (message.type === 'tts_error') {
+        console.error('TTS error:', message.message)
+        setIsSpeaking(false)
+      }
+    }
+    
+    ws.onerror = (error) => {
+      console.error('TTS WebSocket error:', error)
+    }
+    
+    ws.onclose = () => {
+      console.log('TTS WebSocket closed')
+    }
+    
+    wsRef.current = ws
+    
+    return () => {
+      ws.close()
+    }
+  }, [])
+
   // ── TTS ──────────────────────────────────────────────────────────
 
   const stopSpeaking = useCallback(() => {
+    // Stop server-side TTS
+    if (audioRef.current) {
+      audioRef.current.pause()
+      audioRef.current = null
+    }
+    // Stop browser TTS as fallback
     synthRef.current?.cancel()
     setIsSpeaking(false)
   }, [])
 
   const speak = useCallback((text: string) => {
-    const synth = synthRef.current
-    if (!synth) return
-    synth.cancel()
-
     // Strip markdown-ish symbols that sound bad when spoken
     const clean = text
       .replace(/```[\s\S]*?```/g, 'code block')
@@ -55,22 +118,35 @@ export function useVoice(onFinalTranscript: (text: string) => void): UseVoiceRet
 
     if (!clean) return
 
-    const utt = new SpeechSynthesisUtterance(clean)
-    utt.rate = 1.05
-    utt.pitch = 1.0
+    // Try server-side TTS first
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({
+        type: 'tts',
+        text: clean,
+        speed: 1.0
+      }))
+    } else {
+      // Fallback to browser TTS
+      const synth = synthRef.current
+      if (!synth) return
+      synth.cancel()
 
-    // Prefer a natural-sounding voice if available
-    const voices = synth.getVoices()
-    const preferred = voices.find(v =>
-      /Google|Samantha|Alex|Daniel|Karen|Moira|Fiona/i.test(v.name)
-    )
-    if (preferred) utt.voice = preferred
+      const utt = new SpeechSynthesisUtterance(clean)
+      utt.rate = 1.05
+      utt.pitch = 1.0
 
-    utt.onstart = () => setIsSpeaking(true)
-    utt.onend   = () => setIsSpeaking(false)
-    utt.onerror = () => setIsSpeaking(false)
+      const voices = synth.getVoices()
+      const preferred = voices.find(v =>
+        /Google|Samantha|Alex|Daniel|Karen|Moira|Fiona/i.test(v.name)
+      )
+      if (preferred) utt.voice = preferred
 
-    synth.speak(utt)
+      utt.onstart = () => setIsSpeaking(true)
+      utt.onend   = () => setIsSpeaking(false)
+      utt.onerror = () => setIsSpeaking(false)
+
+      synth.speak(utt)
+    }
   }, [])
 
   // ── STT ──────────────────────────────────────────────────────────
