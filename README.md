@@ -1,73 +1,22 @@
-# AI Agent
+# AI Agent (OpenClaw-style)
 
-An intelligent AI agent with WebSocket-based real-time communication, memory management, and tool execution capabilities.
+Personal AI agent with persistent memory, tool execution, and optional WhatsApp channel.
 
-## Features
-
-- Real-time chat via WebSocket
-- Short-term and long-term memory management
-- Tool registry with policy enforcement
-- Retrieval-augmented generation (RAG)
-- Streaming responses
-- Modern React frontend with Next.js
-
-## Tech Stack
-
-### Backend
-
-- FastAPI
-- WebSocket support
-- ChromaDB for vector storage
-- SQLite for persistence
-- LangChain for LLM integration
-
-### Frontend
-
-- Next.js 14
-- TypeScript
-- Tailwind CSS
-- Zustand for state management
-
-## Getting Started
-
-### Prerequisites
-
-- Python 3.10+
-- Node.js 18+
-- OpenAI API key
-
-### Backend Setup
+## Quick Start
 
 ```bash
 cd backend
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+cp .env.example .env  # Add your API keys
 pip install -r requirements.txt
-
-# Set environment variables
-export OPENAI_API_KEY=your_api_key_here
-
-# Run the server
-uvicorn app.main:app --reload
+python -m app.main
 ```
 
-### Frontend Setup
-
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-Open [http://localhost:3000](http://localhost:3000) to view the application.
+Web UI: `http://localhost:8000` | WhatsApp: Configure webhook in .env
 
 ## Architecture
 
-- **Agent Orchestrator**: Coordinates tool execution and response generation
-- **Memory System**: Manages short-term (conversation) and long-term (persistent) memory
-- **Tool Registry**: Manages available tools with policy enforcement
-- **Retrieval System**: Embeds and retrieves relevant context for RAG
-
-## License
-
-MIT
+- **Gateway**: Routes messages between channels → LLM → tools → response
+- **Memory**: Markdown files + SQLite vector search, auto-captured every turn
+- **Channels**: Web (always on), WhatsApp (optional via Twilio)
+- **Skills**: Drop SKILL.md files in `data/skills/` to extend capabilities
+- **Tools**: Web search, filesystem, scraper, custom tools via registry

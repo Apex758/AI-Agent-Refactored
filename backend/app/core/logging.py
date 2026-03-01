@@ -1,48 +1,14 @@
-"""
-Logging configuration using loguru.
-"""
+"""Logging configuration."""
 import sys
-from loguru import logger
-from app.core.config import settings
+import logging
 
-
-def setup_logging():
-    """Configure application logging."""
-    
-    # Remove default handler
-    logger.remove()
-    
-    # Add console handler
-    logger.add(
-        sys.stderr,
-        format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>",
-        level="DEBUG" if settings.debug else "INFO",
-        colorize=True
+def setup_logging(debug: bool = False):
+    level = logging.DEBUG if debug else logging.INFO
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s | %(levelname)-8s | %(name)s - %(message)s",
+        handlers=[logging.StreamHandler(sys.stdout)]
     )
-    
-    # Add file handler
-    logger.add(
-        "logs/app.log",
-        rotation="10 MB",
-        retention="7 days",
-        level="DEBUG" if settings.debug else "INFO",
-        format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function}:{line} - {message}"
-    )
-    
-    # Add error file handler
-    logger.add(
-        "logs/error.log",
-        rotation="10 MB",
-        retention="7 days",
-        level="ERROR",
-        format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function}:{line} - {message}"
-    )
-    
-    return logger
+    return logging.getLogger("agent")
 
-
-def get_logger(name: str = None):
-    """Get a logger instance."""
-    if name:
-        return logger.bind(name=name)
-    return logger
+logger = setup_logging()

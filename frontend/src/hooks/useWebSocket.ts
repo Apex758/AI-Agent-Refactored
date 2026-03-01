@@ -1,90 +1,55 @@
 'use client'
-
-import { useEffect, useRef, useState, useCallback } from 'react'
-import type { UseWebSocketReturn, WSMessage, ChatMessagePayload, ToolResultPayload, ErrorPayload } from '@/types'
+import { useEffect, useRef, useCallback } from 'react'
 import { useChatStore } from '@/store/chatStore'
 
-const WS_URL = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000/ws'
+const WS_BASE = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000'
 
-export function useWebSocket(): UseWebSocketReturn {
+export function useWebSocket(clientId: string = 'default') {
   const wsRef = useRef<WebSocket | null>(null)
-  const [isConnected, setIsConnected] = useState(false)
-  const [lastMessage, setLastMessage] = useState<WSMessage | null>(null)
-  
-  const { addMessage, updateStreamingContent, setProcessing, addToolResult, setError } = useChatStore()
+  const { appendStreaming, finalizeStreaming, setError, addMessage } = useChatStore()
 
-  const handleMessage = useCallback((event: MessageEvent) => {
-    try {
-      const message: WSMessage = JSON.parse(event.data)
-      setLastMessage(message)
-
-      switch (message.type) {
-        case 'message': {
-          const payload = message.payload as ChatMessagePayload
-          updateStreamingContent(payload.message.content)
-          break
-        }
-        case 'tool_result': {
-          const payload = message.payload as ToolResultPayload
-          addToolResult({
-            toolCallId: payload.toolCallId,
-            result: payload.result,
-            error: payload.error,
-          })
-          break
-        }
-        case 'error': {
-          const payload = message.payload as ErrorPayload
-          setError(payload.message)
-          break
-        }
-        case 'connected': {
-          setIsConnected(true)
-          break
-        }
-      }
-    } catch (err) {
-      console.error('Failed to parse WebSocket message:', err)
-    }
-  }, [addMessage, updateStreamingContent, addToolResult, setError])
-
-  const handleOpen = useCallback(() => {
-    setIsConnected(true)
-  }, [])
-
-  const handleClose = useCallback(() => {
-    setIsConnected(false)
-    setProcessing(false)
-  }, [setProcessing])
-
-  const handleError = useCallback((event: Event) => {
-    console.error('WebSocket error:', event)
-    setError('Connection error')
-  }, [setError])
-
-  useEffect(() => {
-    const ws = new WebSocket(WS_URL)
+  const connect = useCallback(() => {
+    const ws = new WebSocket(`${WS_BASE}/api/ws/${clientId}`)
     wsRef.current = ws
 
-    ws.addEventListener('open', handleOpen)
-    ws.addEventListener('message', handleMessage)
-    ws.addEventListener('close', handleClose)
-    ws.addEventListener('error', handleError)
-
-    return () => {
-      ws.removeEventListener('open', handleOpen)
-      ws.removeEventListener('message', handleMessage)
-      ws.removeEventListener('close', handleClose)
-      ws.removeEventListener('error', handleError)
-      ws.close()
+    ws.onmessage = (e) => {
+      try {
+        const msg = JSON.parse(e.data)
+        switch (msg.type) {
+          case 'token':
+            appendStreaming(msg.content)
+            break
+          case 'complete':
+            finalizeStreaming()
+            break
+          case 'system':
+            addMessage({ id: Date.now().toString(), role: 'system', content: msg.content, timestamp: Date.now() })
+            break
+          case 'error':
+            setError(msg.content)
+            break
+        }
+      } catch (err) {
+        console.error('WS parse error:', err)
+      }
     }
-  }, [handleOpen, handleMessage, handleClose, handleError])
 
-  const send = useCallback((data: unknown) => {
+    ws.onclose = () => setTimeout(connect, 3000) // Auto-reconnect
+    ws.onerror = () => setError('Connection error — retrying...')
+
+    return ws
+  }, [clientId, appendStreaming, finalizeStreaming, setError, addMessage])
+
+  useEffect(() => {
+    const ws = connect()
+    return () => { ws.close() }
+  }, [connect])
+
+  const send = useCallback((message: string) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify(data))
+      wsRef.current.send(JSON.stringify({ message }))
     }
   }, [])
 
-  return { isConnected, send, lastMessage }
+  return { send }
 }

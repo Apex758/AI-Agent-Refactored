@@ -1,81 +1,36 @@
 import { create } from 'zustand'
-import type { ChatStore, Message, ToolResult } from '@/types'
+import type { ChatStore, Message } from '@/types'
 
-const generateId = () => Math.random().toString(36).substring(2, 15)
+const genId = () => Math.random().toString(36).slice(2, 12)
 
 export const useChatStore = create<ChatStore>((set, get) => ({
-  // State
   messages: [],
   isProcessing: false,
-  currentStreamingMessage: '',
-  results: [],
+  streamingContent: '',
+  memoryContent: '',
   error: null,
 
-  // Actions
   sendMessage: (content: string) => {
-    const userMessage: Message = {
-      id: generateId(),
-      role: 'user',
-      content,
-      timestamp: Date.now(),
-    }
-
-    set((state) => ({
-      messages: [...state.messages, userMessage],
-      isProcessing: true,
-      currentStreamingMessage: '',
-      error: null,
-    }))
+    const msg: Message = { id: genId(), role: 'user', content, timestamp: Date.now() }
+    set(s => ({ messages: [...s.messages, msg], isProcessing: true, streamingContent: '', error: null }))
   },
 
-  addMessage: (message: Message) => {
-    set((state) => ({
-      messages: [...state.messages, message],
-    }))
-  },
+  addMessage: (msg: Message) => set(s => ({ messages: [...s.messages, msg] })),
 
-  updateStreamingContent: (content: string) => {
-    set({ currentStreamingMessage: content })
-  },
+  appendStreaming: (token: string) => set(s => ({ streamingContent: s.streamingContent + token })),
 
-  setProcessing: (processing: boolean) => {
-    set({ isProcessing: processing })
-    
-    // When processing finishes, add the streaming message as a new assistant message
-    if (!processing) {
-      const { currentStreamingMessage, messages } = get()
-      if (currentStreamingMessage) {
-        const assistantMessage: Message = {
-          id: generateId(),
-          role: 'assistant',
-          content: currentStreamingMessage,
-          timestamp: Date.now(),
-        }
-        set({
-          messages: [...messages, assistantMessage],
-          currentStreamingMessage: '',
-        })
-      }
+  finalizeStreaming: () => {
+    const { streamingContent, messages } = get()
+    if (streamingContent) {
+      const msg: Message = { id: genId(), role: 'assistant', content: streamingContent, timestamp: Date.now() }
+      set({ messages: [...messages, msg], streamingContent: '', isProcessing: false })
+    } else {
+      set({ isProcessing: false })
     }
   },
 
-  addToolResult: (result: ToolResult) => {
-    set((state) => ({
-      results: [...state.results, result],
-    }))
-  },
-
-  setError: (error: string | null) => {
-    set({ error, isProcessing: false })
-  },
-
-  clearChat: () => {
-    set({
-      messages: [],
-      isProcessing: false,
-      currentStreamingMessage: '',
-      results: [],
-      error: null,
-    })
-  },
+  setProcessing: (v) => set({ isProcessing: v }),
+  setError: (e) => set({ error: e, isProcessing: false }),
+  setMemory: (content) => set({ memoryContent: content }),
+  clearChat: () => set({ messages: [], streamingContent: '', error: null, isProcessing: false }),
 }))

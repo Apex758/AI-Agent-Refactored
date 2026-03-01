@@ -1,4 +1,3 @@
-// Message types
 export type MessageRole = 'user' | 'assistant' | 'system'
 
 export interface Message {
@@ -6,72 +5,32 @@ export interface Message {
   role: MessageRole
   content: string
   timestamp: number
-  toolCalls?: ToolCall[]
-  toolResults?: ToolResult[]
 }
 
-export interface ToolCall {
+export interface MemoryResult {
   id: string
-  name: string
-  arguments: Record<string, unknown>
+  text: string
+  score: number
+  source: string
 }
 
-export interface ToolResult {
-  toolCallId: string
-  result: unknown
-  error?: string
-}
-
-// WebSocket message types
 export interface WSMessage {
-  type: 'message' | 'tool_call' | 'tool_result' | 'error' | 'connected'
-  payload: unknown
+  type: 'token' | 'complete' | 'status' | 'system' | 'error'
+  content: string
 }
 
-export interface ChatMessagePayload {
-  message: Message
-}
-
-export interface ToolCallPayload {
-  toolCall: ToolCall
-}
-
-export interface ToolResultPayload {
-  toolCallId: string
-  result: unknown
-  error?: string
-}
-
-export interface ErrorPayload {
-  message: string
-}
-
-// Chat state
-export interface ChatState {
+export interface ChatStore {
   messages: Message[]
   isProcessing: boolean
-  currentStreamingMessage: string
-  results: ToolResult[]
+  streamingContent: string
+  memoryContent: string
   error: string | null
-}
-
-// Actions
-export interface ChatActions {
   sendMessage: (content: string) => void
-  addMessage: (message: Message) => void
-  updateStreamingContent: (content: string) => void
-  setProcessing: (processing: boolean) => void
-  addToolResult: (result: ToolResult) => void
-  setError: (error: string | null) => void
+  addMessage: (msg: Message) => void
+  appendStreaming: (token: string) => void
+  finalizeStreaming: () => void
+  setProcessing: (v: boolean) => void
+  setError: (e: string | null) => void
+  setMemory: (content: string) => void
   clearChat: () => void
-}
-
-// Store type
-export interface ChatStore extends ChatState, ChatActions {}
-
-// WebSocket hook return type
-export interface UseWebSocketReturn {
-  isConnected: boolean
-  send: (data: unknown) => void
-  lastMessage: WSMessage | null
 }

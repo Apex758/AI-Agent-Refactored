@@ -2,20 +2,14 @@ import type { Metadata } from 'next'
 import './globals.css'
 
 export const metadata: Metadata = {
-  title: 'AI Agent Chat',
-  description: 'AI Agent with Web Search and Tool Capabilities',
+  title: 'AI Agent',
+  description: 'Personal AI Agent with Memory',
 }
 
-export default function RootLayout({
-  children,
-}: {
-  children: React.ReactNode
-}) {
+export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
-      <body className="bg-gray-50 min-h-screen">
-        {children}
-      </body>
+      <body className="bg-gray-950 text-gray-100 min-h-screen">{children}</body>
     </html>
   )
 }
