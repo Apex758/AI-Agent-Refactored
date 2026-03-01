@@ -33,9 +33,14 @@ export function useWebSocket(clientId: string = 'default') {
         console.error('WS parse error:', err)
       }
     }
-
-    ws.onclose = () => setTimeout(connect, 3000) // Auto-reconnect
-    ws.onerror = () => setError('Connection error — retrying...')
+ 
+    ws.onopen = () => setError(null)
+    ws.onclose = () => setTimeout(connect, 3000)
+    ws.onerror = () => {
+      if (wsRef.current?.readyState !== WebSocket.CONNECTING) {
+        setError('Connection error — retrying...')
+      }
+    }
 
     return ws
   }, [clientId, appendStreaming, finalizeStreaming, setError, addMessage])
