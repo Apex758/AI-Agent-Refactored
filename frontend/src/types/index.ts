@@ -13,6 +13,12 @@ export interface Attachment {
   name: string
 }
 
+/** Media scraped from a web_fetch tool call */
+export interface ScrapedMedia {
+  images: string[]   // absolute image URLs
+  videos: string[]   // YouTube video IDs
+}
+
 export interface Message {
   id: string
   role: MessageRole
@@ -20,6 +26,7 @@ export interface Message {
   timestamp: number
   citations?: Citation[]
   attachment?: Attachment
+  media?: ScrapedMedia  // populated when agent scrapes a page
 }
 
 export interface Chat {
@@ -38,9 +45,11 @@ export interface Document {
 }
 
 export interface WSMessage {
-  type: 'token' | 'complete' | 'status' | 'citations' | 'error'
+  type: 'token' | 'complete' | 'status' | 'citations' | 'error' | 'media'
   content?: string
   citations?: Citation[]
+  images?: string[]
+  videos?: string[]
 }
 
 export interface VoiceState {
@@ -76,6 +85,7 @@ export interface ChatStore {
 
   sendMessage: (content: string) => void
   addMessage: (msg: Message) => void
+  addScrapedMedia: (images: string[], videos: string[]) => void
   setCitations: (citations: Citation[]) => void
   appendStreaming: (token: string) => void
   finalizeStreaming: () => void

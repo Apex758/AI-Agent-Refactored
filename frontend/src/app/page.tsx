@@ -3,10 +3,12 @@
 import { useState, useRef, useEffect, FormEvent, useCallback } from 'react'
 import { useChatStore } from '@/store/chatStore'
 import { useUIStore } from '@/store/uiStore'
+import { useWhiteboardStore } from '@/store/whiteboardStore'
 import { useWebSocket } from '@/hooks/useWebSocket'
 import { useVoice } from '@/hooks/useVoice'
 import CenterStage from '@/components/CenterStage'
-import type { Document, Citation } from '@/types'
+import LazyYouTubeEmbed from '@/components/LazyYouTubeEmbed'
+import type { Document, Citation, ScrapedMedia } from '@/types'
 
 // ── YouTube embed helper ──────────────────────────────────────────
 function getYouTubeId(url: string): string | null {
@@ -37,22 +39,10 @@ function MessageContent({ content }: { content: string }) {
     <>
       {parts.map((p, i) => {
         if (p.type === 'url') {
-          // FIX 2: YouTube embed inline
+          // YouTube embed — lazy (only mounts iframe when in viewport)
           const ytId = getYouTubeId(p.value)
           if (ytId) {
-            return (
-              <span key={i} className="block my-2">
-                <iframe
-                  width="100%"
-                  height="200"
-                  src={`https://www.youtube.com/embed/${ytId}`}
-                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                  allowFullScreen
-                  className="rounded-xl"
-                  style={{ maxWidth: 360, border: '1px solid var(--border)' }}
-                />
-              </span>
-            )
+            return <LazyYouTubeEmbed key={i} ytId={ytId} />
           }
 
           // FIX 2: image URL inline preview
@@ -131,6 +121,51 @@ function CitationBadge({ citation }: { citation: Citation }) {
       {citation.page > 1 && <span style={{ opacity: 0.6 }}> p.{citation.page}</span>}
       {isCross && <span style={{ opacity: 0.55, fontSize: 10 }}> ↗</span>}
     </span>
+  )
+}
+
+// ── Scraped media card ────────────────────────────────────────────
+function MediaCard({ media }: { media: ScrapedMedia }) {
+  const hasImages = media.images.length > 0
+  const hasVideos = media.videos.length > 0
+  if (!hasImages && !hasVideos) return null
+
+  return (
+    <div
+      className="max-w-[78%] rounded-xl p-3 mt-1"
+      style={{
+        background: 'var(--bg-raised)',
+        border: '1px solid var(--border-strong)',
+      }}
+    >
+      <p className="text-xs font-semibold mb-2" style={{ color: 'var(--vegas-gold)', letterSpacing: '0.08em' }}>
+        🌐 Scraped Media
+      </p>
+
+      {hasImages && (
+        <div className="flex gap-2 flex-wrap">
+          {media.images.slice(0, 6).map((src, i) => (
+            <a key={i} href={src} target="_blank" rel="noopener noreferrer">
+              <img
+                src={src}
+                alt={`scraped-${i}`}
+                className="rounded-lg object-cover"
+                style={{ width: 80, height: 60, border: '1px solid var(--border)' }}
+                onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }}
+              />
+            </a>
+          ))}
+        </div>
+      )}
+
+      {hasVideos && (
+        <div className="flex gap-2 flex-wrap mt-2">
+          {media.videos.slice(0, 4).map((vtId, i) => (
+            <LazyYouTubeEmbed key={i} ytId={vtId} />
+          ))}
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -289,11 +324,12 @@ export default function Home() {
     loadChats, createChat, deleteChat, renameChat,
     setCurrentChat, sendMessage, clearChat,
     uploadDocument, deleteDocument,
-    setProcessing,
+    setProcessing, addScrapedMedia,
   } = useChatStore()
 
   // FIX 3: watch board mode for auto-collapse
   const { mode } = useUIStore()
+  const { placeScrapedMedia } = useWhiteboardStore()
 
   const currentMessages  = currentChatId ? (messagesByChatId[currentChatId] || []) : []
   const currentDocuments = currentChatId ? (documentsByChatId[currentChatId] || []) : []
@@ -346,6 +382,17 @@ export default function Home() {
   useEffect(() => {
     if (voice.interimText) setInput(voice.interimText)
   }, [voice.interimText])
+
+  // ── Auto-place scraped media on the whiteboard ─────────────────
+  useEffect(() => {
+    const last = currentMessages[currentMessages.length - 1]
+    if (last?.role === 'system' && last.media) {
+      const { images = [], videos = [] } = last.media
+      if (images.length > 0 || videos.length > 0) {
+        placeScrapedMedia(images, videos)
+      }
+    }
+  }, [currentMessages, placeScrapedMedia])
 
   // ── General ────────────────────────────────────────────────────
   useEffect(() => { loadConfig(); loadChats() }, [])
@@ -680,6 +727,7 @@ export default function Home() {
                       >
                         <MessageContent content={msg.content} />
                       </div>
+                      {msg.media && <MediaCard media={msg.media} />}
                       {msg.role === 'assistant' && msg.citations && msg.citations.length > 0 && (
                         <div className="flex flex-wrap gap-1 mt-1.5 max-w-[78%]">
                           {msg.citations.map((c, i) => <CitationBadge key={i} citation={c} />)}

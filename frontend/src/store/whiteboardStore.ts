@@ -13,6 +13,7 @@ interface WhiteboardStore {
   loadSnapshot: (chatId: string) => void
   exportAsImage: () => Promise<Blob | null>
   presentOnBoard: (scenePlan: ScenePlan) => void
+  placeScrapedMedia: (images: string[], videoIds: string[]) => void
 }
 
 export const useWhiteboardStore = create<WhiteboardStore>((set, get) => ({
@@ -170,5 +171,72 @@ export const useWhiteboardStore = create<WhiteboardStore>((set, get) => ({
         console.warn('SVG placement stubbed — treating as image')
       }
     }
+  },
+
+  placeScrapedMedia: (images: string[], videoIds: string[]) => {
+    const { editorRef } = get()
+    if (!editorRef) return
+    if (images.length === 0 && videoIds.length === 0) return
+
+    const viewportBounds = editorRef.getViewportScreenBounds()
+    const topLeft = editorRef.screenToPage({ x: viewportBounds.x, y: viewportBounds.y })
+
+    // Place images in a row starting from the top-left of the viewport
+    const IMG_W = 240
+    const IMG_H = 180
+    const GAP = 16
+
+    images.slice(0, 6).forEach((src, i) => {
+      const assetId = `asset:scraped-img-${Date.now()}-${i}` as any
+      editorRef.createAssets([{
+        id: assetId,
+        type: 'image',
+        typeName: 'asset',
+        props: {
+          name: `scraped-${i}`,
+          src,
+          w: IMG_W,
+          h: IMG_H,
+          mimeType: 'image/jpeg',
+          isAnimated: false,
+        },
+        meta: {},
+      }])
+      editorRef.createShape({
+        type: 'image',
+        x: topLeft.x + i * (IMG_W + GAP),
+        y: topLeft.y + 40,
+        props: { assetId, w: IMG_W, h: IMG_H },
+      })
+    })
+
+    // Place YouTube video thumbnails as image shapes below the images
+    const yOffset = images.length > 0 ? IMG_H + GAP * 3 : 40
+    const VIDEO_W = 240
+    const VIDEO_H = 135 // 16:9 aspect ratio
+    videoIds.slice(0, 4).forEach((vtId, i) => {
+      const thumbUrl = `https://img.youtube.com/vi/${vtId}/mqdefault.jpg`
+      const assetId = `asset:scraped-video-${Date.now()}-${i}` as any
+      editorRef.createAssets([{
+        id: assetId,
+        type: 'image',
+        typeName: 'asset',
+        props: {
+          name: `video-${vtId}`,
+          src: thumbUrl,
+          w: VIDEO_W,
+          h: VIDEO_H,
+          mimeType: 'image/jpeg',
+          isAnimated: false,
+        },
+        meta: {},
+      }])
+      editorRef.createShape({
+        type: 'image',
+        x: topLeft.x + i * (VIDEO_W + GAP),
+        y: topLeft.y + yOffset,
+        props: { assetId, w: VIDEO_W, h: VIDEO_H },
+      })
+    })
   },
 }))

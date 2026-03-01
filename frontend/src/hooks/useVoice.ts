@@ -35,10 +35,13 @@ export function useVoice(onFinalTranscript: (text: string) => void): UseVoiceRet
   }, [])
 
   // Initialize WebSocket connection for server-side TTS
+  // Only connect if a WS URL is explicitly configured — avoids flood of
+  // connection errors in dev when the backend is not running.
   useEffect(() => {
     if (typeof window === 'undefined') return
-    
-    const wsUrl = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000'
+    const wsUrl = process.env.NEXT_PUBLIC_WS_URL
+    if (!wsUrl) return   // no URL → skip WS, browser SpeechSynthesis used as fallback
+
     const ws = new WebSocket(`${wsUrl}/webrtc`)
     
     ws.onopen = () => {

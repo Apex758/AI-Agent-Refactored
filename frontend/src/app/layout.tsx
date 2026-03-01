@@ -4,6 +4,7 @@ import './globals.css'
 export const metadata: Metadata = {
   title: 'AI Agent',
   description: 'Personal AI Agent with Memory',
+  icons: { icon: '/favicon.svg', shortcut: '/favicon.svg' },
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

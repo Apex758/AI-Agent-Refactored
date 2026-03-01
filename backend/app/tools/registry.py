@@ -180,6 +180,15 @@ class ToolRegistry:
             return {"error": str(e)}
 
     async def _web_fetch(self, url: str) -> Dict:
+        """Fetch URL, extract text, images, and YouTube video IDs."""
+        import re as _re
+        YT_RE = _re.compile(
+            r'(?:youtube\.com/watch\?v=|youtu\.be/|youtube\.com/embed/)([a-zA-Z0-9_-]{11})'
+        )
+        # Patterns that indicate tracking/icon images to skip
+        SKIP_PATTERNS = ('pixel', 'tracking', 'analytics', 'beacon', 'data:', 'base64',
+                         '.ico', 'favicon', 'logo', '1x1', 'blank')
+
         try:
             async with httpx.AsyncClient() as client:
                 resp = await client.get(url, timeout=15, follow_redirects=True,
@@ -187,10 +196,59 @@ class ToolRegistry:
                 if resp.status_code == 200:
                     from bs4 import BeautifulSoup
                     soup = BeautifulSoup(resp.text, "html.parser")
+
+                    # ── Extract images ──────────────────────────────
+                    images: list = []
+                    for img in soup.find_all("img", src=True):
+                        src: str = img["src"].strip()
+                        # Make absolute
+                        if src.startswith("//"):
+                            src = "https:" + src
+                        elif src.startswith("/"):
+                            from urllib.parse import urlparse
+                            parsed = urlparse(url)
+                            src = f"{parsed.scheme}://{parsed.netloc}{src}"
+                        if not src.startswith("http"):
+                            continue
+                        # Skip tiny/tracking images
+                        sl = src.lower()
+                        if any(p in sl for p in SKIP_PATTERNS):
+                            continue
+                        if src not in images:
+                            images.append(src)
+                        if len(images) >= 6:
+                            break
+
+                    # ── Extract YouTube video IDs ───────────────────
+                    videos: list = []
+                    for tag in soup.find_all(["a", "iframe"], href=True if True else False):
+                        href = tag.get("href") or tag.get("src") or ""
+                        m = YT_RE.search(href)
+                        if m and m.group(1) not in videos:
+                            videos.append(m.group(1))
+                        if len(videos) >= 4:
+                            break
+                    # Also scan raw HTML for YouTube IDs
+                    if len(videos) < 4:
+                        for m in YT_RE.finditer(resp.text):
+                            vid = m.group(1)
+                            if vid not in videos:
+                                videos.append(vid)
+                            if len(videos) >= 4:
+                                break
+
+                    # ── Extract text ────────────────────────────────
                     for s in soup(["script", "style"]):
                         s.decompose()
                     text = soup.get_text(separator="\n", strip=True)[:5000]
-                    return {"url": url, "title": soup.title.string if soup.title else "", "content": text}
+
+                    return {
+                        "url": url,
+                        "title": soup.title.string if soup.title else "",
+                        "content": text,
+                        "images": images,
+                        "videos": videos,
+                    }
                 return {"error": f"Fetch failed: {resp.status_code}"}
         except Exception as e:
             return {"error": str(e)}

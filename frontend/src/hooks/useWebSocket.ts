@@ -7,7 +7,7 @@ const WS_BASE = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000'
 export function useWebSocket(clientId: string) {
   const wsRef = useRef<WebSocket | null>(null)
   const clientIdRef = useRef(clientId)
-  const { appendStreaming, finalizeStreaming, setError, setCitations } = useChatStore()
+  const { appendStreaming, finalizeStreaming, setError, setCitations, addScrapedMedia } = useChatStore()
 
   useEffect(() => { clientIdRef.current = clientId }, [clientId])
 
@@ -37,6 +37,9 @@ export function useWebSocket(clientId: string) {
             break
           case 'error':
             setError(msg.content)
+            break
+          case 'media':
+            addScrapedMedia(msg.images ?? [], msg.videos ?? [])
             break
         }
       } catch (err) {

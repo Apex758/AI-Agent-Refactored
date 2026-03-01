@@ -99,6 +99,13 @@ async def websocket_chat(ws: WebSocket, client_id: str):
                             "type": "citations",
                             "citations": event["citations"],
                         })
+                    elif event["type"] == "media":
+                        # Send scraped images/videos so frontend can show MediaCard + board
+                        await ws_manager.send(client_id, {
+                            "type": "media",
+                            "images": event.get("images", []),
+                            "videos": event.get("videos", []),
+                        })
                     elif event["type"] == "token":
                         full_response += event["content"]
                         await ws_manager.send(client_id, {"type": "token", "content": event["content"]})

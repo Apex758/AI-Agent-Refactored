@@ -187,6 +187,26 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     }))
   },
 
+  addScrapedMedia: (images: string[], videos: string[]) => {
+    const { currentChatId, messagesByChatId } = get()
+    if (!currentChatId) return
+    if (images.length === 0 && videos.length === 0) return
+    const msg: Message = {
+      id: genId(),
+      role: 'system',
+      content: '🌐 Scraped media from page',
+      timestamp: Date.now(),
+      citations: [],
+      media: { images, videos },
+    }
+    set(s => ({
+      messagesByChatId: {
+        ...s.messagesByChatId,
+        [currentChatId]: [...(messagesByChatId[currentChatId] || []), msg],
+      },
+    }))
+  },
+
   setCitations: (citations) => set({ pendingCitations: citations }),
 
   appendStreaming: (token: string) => set(s => ({ streamingContent: s.streamingContent + token })),

@@ -6,6 +6,36 @@
 
 ## Important Facts
 
+- User likes Funny Kids Fails Compilation videos
+
+
+- User likes humorous content
+
+
+- User wants funny videos
+
+
+- User is interested in flower pictures
+
+
+- User wants a picture of a flower
+
+
+- User prefers funny kids videos
+
+
+- User likes funny videos
+
+
+- User is interested in cows
+
+
+- User is interested in learning simple algebra basics
+
+
+- User wants to watch a video on simple algebra
+
+
 - User likes cat pictures
 
 

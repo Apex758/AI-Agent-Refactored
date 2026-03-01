@@ -11,6 +11,7 @@ Flow:
   7. Memory auto-capture
   8. Return response + citations to channel
 """
+import asyncio
 import json
 import os
 from typing import Dict, List, Optional, AsyncGenerator, Tuple
@@ -83,9 +84,11 @@ class Gateway:
         channel: str = "web",
     ) -> AsyncGenerator[Dict, None]:
         """
-        Stream response tokens. Yields dicts:
-          {"type": "token", "content": "..."}
-          {"type": "citations", "citations": [...]}  ← sent before first token
+        Stream response tokens with full tool-call support.
+        Yields:
+          {"type": "citations", "citations": [...]}   ← first
+          {"type": "media", "images": [...], "videos": [...]}  ← if web_fetch ran
+          {"type": "token", "content": "..."}         ← response words
         """
         self.memory.save_message(client_id, "user", message)
         memory_context = await self.memory.auto_recall(message)
@@ -95,19 +98,107 @@ class Gateway:
         # Document RAG search — yield citations upfront
         doc_results = await self.memory.search_documents(message, chat_id=client_id, top_k=5)
         doc_context, citations = self.memory.format_doc_context(doc_results)
-
-        # Send citations before streaming starts
         yield {"type": "citations", "citations": citations}
 
         system_prompt = self._build_system_prompt(memory_context, doc_context)
+        tool_schemas = self.tools.get_tool_schemas()
 
-        full_response = ""
-        async for token in self.llm.stream(messages, system_prompt):
-            full_response += token
-            yield {"type": "token", "content": token}
+        # Run the full agent loop (supports tool calls) and collect scraped media
+        full_response, media = await self._agent_loop_with_media(
+            messages, system_prompt, tool_schemas
+        )
+
+        # Yield any scraped media before tokens so the card appears first
+        if media["images"] or media["videos"]:
+            yield {"type": "media", "images": media["images"], "videos": media["videos"]}
+
+        # Yield response word-by-word for a streaming feel
+        words = full_response.split(" ")
+        for i, word in enumerate(words):
+            chunk = word + (" " if i < len(words) - 1 else "")
+            yield {"type": "token", "content": chunk}
 
         self.memory.save_message(client_id, "assistant", full_response)
-        asyncio.create_task(self.memory.auto_capture(message, full_response, client_id)) 
+        asyncio.create_task(self.memory.auto_capture(message, full_response, client_id))
+
+    async def _agent_loop_with_media(
+        self,
+        messages: List[Dict],
+        system_prompt: str,
+        tool_schemas: List[Dict],
+        max_iterations: int = None,
+    ) -> Tuple[str, Dict]:
+        """
+        Like _agent_loop but also collects images/videos from web_fetch calls.
+        Returns (response_text, {"images": [...], "videos": [...]}).
+        """
+        max_iterations = max_iterations or settings.max_tool_calls
+        iteration = 0
+        media: Dict = {"images": [], "videos": []}
+
+        while iteration < max_iterations:
+            result = await self.llm.generate(
+                messages=messages,
+                system_prompt=system_prompt,
+                tools=tool_schemas if tool_schemas else None,
+            )
+
+            if result["type"] == "text":
+                return result["content"], media
+
+            if result["type"] == "tool_calls":
+                tool_calls = result["tool_calls"]
+                assistant_content = result.get("content", "")
+
+                for tc in tool_calls:
+                    logger.info(f"Tool call: {tc['name']}({tc.get('arguments', '')})")
+                    args = tc.get("arguments", {})
+                    if isinstance(args, str):
+                        try:
+                            args = json.loads(args)
+                        except json.JSONDecodeError:
+                            args = {}
+                    try:
+                        tool_result = await self.tools.execute(tc["name"], args)
+
+                        # Collect scraped media from web_fetch results
+                        if tc["name"] == "web_fetch" and isinstance(tool_result, dict):
+                            for img in tool_result.get("images", []):
+                                if img not in media["images"]:
+                                    media["images"].append(img)
+                            for vid in tool_result.get("videos", []):
+                                if vid not in media["videos"]:
+                                    media["videos"].append(vid)
+
+                        result_str = json.dumps(tool_result) if isinstance(tool_result, dict) else str(tool_result)
+                    except Exception as e:
+                        result_str = f"Error: {str(e)}"
+
+                    if settings.llm_provider == "openai":
+                        messages.append({
+                            "role": "assistant",
+                            "content": assistant_content,
+                            "tool_calls": [{
+                                "id": tc["id"],
+                                "type": "function",
+                                "function": {"name": tc["name"], "arguments": json.dumps(args)}
+                            }]
+                        })
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": tc["id"],
+                            "content": result_str,
+                        })
+                    else:
+                        messages.append({"role": "assistant", "content": f"[Using {tc['name']}]"})
+                        messages.append({"role": "user", "content": f"Tool result for {tc['name']}: {result_str}"})
+
+                iteration += 1
+                continue
+
+            return result.get("content", "I couldn't generate a response."), media
+
+        return "Reached maximum tool call limit.", media
 
     async def _agent_loop(
         self,
