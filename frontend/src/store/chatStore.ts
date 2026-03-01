@@ -1,15 +1,28 @@
 import { create } from 'zustand'
-import type { ChatStore, Message, Chat } from '@/types'
+import type { ChatStore, Message, Chat, Document } from '@/types'
 
 const genId = () => Math.random().toString(36).slice(2, 12)
 
 export const useChatStore = create<ChatStore>((set, get) => ({
+  agentName: 'Atlas',
   chats: [],
   currentChatId: null,
   messagesByChatId: {},
+  documentsByChatId: {},
+  pendingCitations: [],
   isProcessing: false,
   streamingContent: '',
   error: null,
+
+  // ── Config ─────────────────────────────────────────────────────
+
+  loadConfig: async () => {
+    try {
+      const res = await fetch('/api/config')
+      const data = await res.json()
+      set({ agentName: data.agent_name })
+    } catch {}
+  },
 
   // ── Chat Management ────────────────────────────────────────────
 
@@ -19,7 +32,6 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       const data = await res.json()
       const chats: Chat[] = data.chats || []
       set({ chats })
-      // Auto-select first chat if none selected
       if (chats.length > 0 && !get().currentChatId) {
         get().setCurrentChat(chats[0].id)
       }
@@ -46,16 +58,13 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   deleteChat: async (id: string) => {
     try {
       await fetch(`/api/chats/${id}`, { method: 'DELETE' })
-      const { chats, currentChatId, messagesByChatId } = get()
+      const { chats, currentChatId, messagesByChatId, documentsByChatId } = get()
       const remaining = chats.filter(c => c.id !== id)
-      const { [id]: _, ...rest } = messagesByChatId
-      set({ chats: remaining, messagesByChatId: rest })
+      const { [id]: _m, ...restMessages } = messagesByChatId
+      const { [id]: _d, ...restDocs } = documentsByChatId
+      set({ chats: remaining, messagesByChatId: restMessages, documentsByChatId: restDocs })
       if (currentChatId === id) {
-        if (remaining.length > 0) {
-          get().setCurrentChat(remaining[0].id)
-        } else {
-          set({ currentChatId: null })
-        }
+        remaining.length > 0 ? get().setCurrentChat(remaining[0].id) : set({ currentChatId: null })
       }
     } catch (e) {
       console.error('Failed to delete chat', e)
@@ -69,25 +78,16 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name }),
       })
-      set(s => ({
-        chats: s.chats.map(c => c.id === id ? { ...c, name } : c)
-      }))
+      set(s => ({ chats: s.chats.map(c => c.id === id ? { ...c, name } : c) }))
     } catch (e) {
       console.error('Failed to rename chat', e)
     }
   },
 
   setCurrentChat: (id: string) => {
-    set({
-      currentChatId: id,
-      streamingContent: '',
-      isProcessing: false,
-      error: null,
-    })
-    // Load history if not already loaded
-    if (!get().messagesByChatId[id]) {
-      get().loadHistory(id)
-    }
+    set({ currentChatId: id, streamingContent: '', isProcessing: false, error: null, pendingCitations: [] })
+    if (!get().messagesByChatId[id]) get().loadHistory(id)
+    if (!get().documentsByChatId[id]) get().loadDocuments(id)
   },
 
   loadHistory: async (chatId: string) => {
@@ -99,12 +99,62 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         role: h.role,
         content: h.content,
         timestamp: new Date(h.timestamp).getTime(),
+        citations: [],
       }))
-      set(s => ({
-        messagesByChatId: { ...s.messagesByChatId, [chatId]: messages }
-      }))
+      set(s => ({ messagesByChatId: { ...s.messagesByChatId, [chatId]: messages } }))
     } catch (e) {
       console.error('Failed to load history', e)
+    }
+  },
+
+  // ── Documents ──────────────────────────────────────────────────
+
+  loadDocuments: async (chatId: string) => {
+    try {
+      const res = await fetch(`/api/documents?chat_id=${chatId}`)
+      const data = await res.json()
+      set(s => ({
+        documentsByChatId: { ...s.documentsByChatId, [chatId]: data.documents || [] }
+      }))
+    } catch (e) {
+      console.error('Failed to load documents', e)
+    }
+  },
+
+  uploadDocument: async (file: File, chatId: string) => {
+    const formData = new FormData()
+    formData.append('file', file)
+    formData.append('chat_id', chatId)
+    try {
+      const res = await fetch('/api/documents/upload', { method: 'POST', body: formData })
+      if (!res.ok) {
+        const err = await res.json()
+        throw new Error(err.detail || 'Upload failed')
+      }
+      const doc: Document = await res.json()
+      set(s => ({
+        documentsByChatId: {
+          ...s.documentsByChatId,
+          [chatId]: [doc, ...(s.documentsByChatId[chatId] || [])],
+        }
+      }))
+      return doc
+    } catch (e: any) {
+      throw new Error(e.message || 'Upload failed')
+    }
+  },
+
+  deleteDocument: async (docId: string, chatId: string) => {
+    try {
+      await fetch(`/api/documents/${docId}`, { method: 'DELETE' })
+      set(s => ({
+        documentsByChatId: {
+          ...s.documentsByChatId,
+          [chatId]: (s.documentsByChatId[chatId] || []).filter(d => d.doc_id !== docId),
+        }
+      }))
+    } catch (e) {
+      console.error('Failed to delete document', e)
     }
   },
 
@@ -113,40 +163,45 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   sendMessage: (content: string) => {
     const { currentChatId, messagesByChatId } = get()
     if (!currentChatId) return
-    const msg: Message = { id: genId(), role: 'user', content, timestamp: Date.now() }
-    const existing = messagesByChatId[currentChatId] || []
+    const msg: Message = { id: genId(), role: 'user', content, timestamp: Date.now(), citations: [] }
     set(s => ({
-      messagesByChatId: { ...s.messagesByChatId, [currentChatId]: [...existing, msg] },
+      messagesByChatId: { ...s.messagesByChatId, [currentChatId]: [...(messagesByChatId[currentChatId] || []), msg] },
       isProcessing: true,
       streamingContent: '',
       error: null,
+      pendingCitations: [],
     }))
   },
 
   addMessage: (msg: Message) => {
     const { currentChatId, messagesByChatId } = get()
     if (!currentChatId) return
-    const existing = messagesByChatId[currentChatId] || []
     set(s => ({
-      messagesByChatId: { ...s.messagesByChatId, [currentChatId]: [...existing, msg] }
+      messagesByChatId: { ...s.messagesByChatId, [currentChatId]: [...(messagesByChatId[currentChatId] || []), msg] }
     }))
   },
 
-  appendStreaming: (token: string) => {
-    set(s => ({ streamingContent: s.streamingContent + token }))
-  },
+  setCitations: (citations) => set({ pendingCitations: citations }),
+
+  appendStreaming: (token: string) => set(s => ({ streamingContent: s.streamingContent + token })),
 
   finalizeStreaming: () => {
-    const { streamingContent, currentChatId, messagesByChatId } = get()
+    const { streamingContent, currentChatId, messagesByChatId, pendingCitations } = get()
     if (streamingContent && currentChatId) {
-      const msg: Message = { id: genId(), role: 'assistant', content: streamingContent, timestamp: Date.now() }
+      const msg: Message = {
+        id: genId(),
+        role: 'assistant',
+        content: streamingContent,
+        timestamp: Date.now(),
+        citations: pendingCitations,
+      }
       const existing = messagesByChatId[currentChatId] || []
       set(s => ({
         messagesByChatId: { ...s.messagesByChatId, [currentChatId]: [...existing, msg] },
         streamingContent: '',
         isProcessing: false,
+        pendingCitations: [],
       }))
-      // Refresh chat list so AI-generated name appears in sidebar
       setTimeout(() => get().loadChats(), 1500)
     } else {
       set({ isProcessing: false, streamingContent: '' })
@@ -161,9 +216,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     if (!currentChatId) return
     set(s => ({
       messagesByChatId: { ...s.messagesByChatId, [currentChatId]: [] },
-      streamingContent: '',
-      error: null,
-      isProcessing: false,
+      streamingContent: '', error: null, isProcessing: false,
     }))
     fetch(`/api/history/${currentChatId}`, { method: 'DELETE' })
   },

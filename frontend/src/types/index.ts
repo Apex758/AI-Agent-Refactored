@@ -1,10 +1,18 @@
 export type MessageRole = 'user' | 'assistant' | 'system'
 
+export interface Citation {
+  doc_id: string
+  filename: string
+  page: number
+  source_type: 'linked_doc' | 'cross_chat_doc'
+}
+
 export interface Message {
   id: string
   role: MessageRole
   content: string
   timestamp: number
+  citations?: Citation[]
 }
 
 export interface Chat {
@@ -13,39 +21,47 @@ export interface Chat {
   created_at: string
 }
 
-export interface MemoryResult {
-  id: string
-  text: string
-  score: number
-  source: string
+export interface Document {
+  doc_id: string
+  filename: string
+  chat_id: string
+  chunk_count: number
+  file_size: number
+  uploaded_at: string
 }
 
 export interface WSMessage {
-  type: 'token' | 'complete' | 'status' | 'system' | 'error'
-  content: string
+  type: 'token' | 'complete' | 'status' | 'citations' | 'error'
+  content?: string
+  citations?: Citation[]
 }
 
 export interface ChatStore {
-  // Chats list
+  agentName: string
   chats: Chat[]
   currentChatId: string | null
+  messagesByChatId: Record<string, Message[]>
+  documentsByChatId: Record<string, Document[]>
+  pendingCitations: Citation[]
+  isProcessing: boolean
+  streamingContent: string
+  error: string | null
+
+  loadConfig: () => Promise<void>
   loadChats: () => Promise<void>
   createChat: (name?: string) => Promise<void>
   deleteChat: (id: string) => Promise<void>
   renameChat: (id: string, name: string) => Promise<void>
   setCurrentChat: (id: string) => void
-
-  // Messages (keyed by chatId)
-  messagesByChatId: Record<string, Message[]>
   loadHistory: (chatId: string) => Promise<void>
 
-  // Current session state
-  isProcessing: boolean
-  streamingContent: string
-  error: string | null
+  loadDocuments: (chatId: string) => Promise<void>
+  uploadDocument: (file: File, chatId: string) => Promise<Document>
+  deleteDocument: (docId: string, chatId: string) => Promise<void>
 
   sendMessage: (content: string) => void
   addMessage: (msg: Message) => void
+  setCitations: (citations: Citation[]) => void
   appendStreaming: (token: string) => void
   finalizeStreaming: () => void
   setProcessing: (v: boolean) => void

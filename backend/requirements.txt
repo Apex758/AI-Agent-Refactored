@@ -14,8 +14,12 @@ anthropic>=0.30.0
 # Vector Store (RAG)
 chromadb>=0.5.0
 
-# Optional: local embeddings (used if no OpenAI key)
-# sentence-transformers>=3.0.0
+# Document Ingestion
+pypdf>=4.0.0
+python-docx>=1.1.0
+
+# local embeddings 
+sentence-transformers>=3.0.0
 
 # Web Scraping
 beautifulsoup4>=4.12.0

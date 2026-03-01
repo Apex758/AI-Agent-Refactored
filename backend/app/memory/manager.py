@@ -2,18 +2,16 @@
 Memory Manager — OpenClaw-style persistent memory.
 
 Architecture:
-  - Markdown files are the source of truth
-  - MEMORY.md = global long-term facts
-  - chats/{chat_id}.md = per-chat memory (summary + keywords + key facts)
-  - memory/YYYY-MM-DD.md = daily conversation logs
-  - SQLite for conversation history + chat metadata (no vectors)
-  - ChromaDB for all vector search — persistent, real semantic search
+  - Markdown files: MEMORY.md (global facts), chats/{id}.md (per-chat), memory/YYYY-MM-DD.md (daily logs)
+  - SQLite: conversation history, chat metadata, document metadata
+  - ChromaDB: all vector search — memories, file chunks, document chunks
+  - DocumentProcessor: handles file ingestion
 """
 import json
 import hashlib
 import sqlite3
 from datetime import datetime, date
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
 from pathlib import Path
 
 from app.core.config import settings
@@ -21,11 +19,6 @@ from app.core.logging import logger
 
 
 def _get_chroma_ef():
-    """
-    Return the ChromaDB embedding function.
-    Uses OpenAI if key is set, otherwise falls back to the built-in
-    sentence-transformers model (runs locally, no API key needed).
-    """
     if settings.openai_api_key:
         from chromadb.utils.embedding_functions import OpenAIEmbeddingFunction
         return OpenAIEmbeddingFunction(
@@ -38,13 +31,9 @@ def _get_chroma_ef():
 
 
 def _chunk_text(text: str, chunk_size: int = 400, overlap: int = 50) -> List[str]:
-    """
-    Split text into overlapping word-count chunks for better retrieval.
-    400 words ~ 500 tokens. Overlap ensures context isn't lost at boundaries.
-    """
     words = text.split()
     if len(words) <= chunk_size:
-        return [text] if text.strip() else []
+        return [text.strip()] if text.strip() else []
     chunks = []
     start = 0
     while start < len(words):
@@ -70,15 +59,15 @@ class MemoryManager:
 
         self._chroma_client = None
         self._collection = None
+        self._doc_processor = None
 
         self._init_db()
         self._init_chroma()
         self._ensure_memory_file()
 
-    # ── ChromaDB Init ────────────────────────────────────────────────
+    # ── ChromaDB ─────────────────────────────────────────────────────
 
     def _init_chroma(self):
-        """Initialize persistent ChromaDB client and collection."""
         import chromadb
         self._chroma_client = chromadb.PersistentClient(path=str(self.chroma_dir))
         self._collection = self._chroma_client.get_or_create_collection(
@@ -88,7 +77,17 @@ class MemoryManager:
         )
         logger.info(f"ChromaDB ready — {self._collection.count()} documents indexed")
 
-    # ── SQLite Init (conversations + chats metadata only) ────────────
+    def get_document_processor(self):
+        """Lazy-init the document processor (shares the ChromaDB collection)."""
+        if self._doc_processor is None:
+            from app.documents.processor import DocumentProcessor
+            self._doc_processor = DocumentProcessor(
+                collection=self._collection,
+                db_path=str(self.db_path),
+            )
+        return self._doc_processor
+
+    # ── SQLite ───────────────────────────────────────────────────────
 
     def _init_db(self):
         conn = sqlite3.connect(str(self.db_path))
@@ -108,11 +107,22 @@ class MemoryManager:
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS documents (
+                doc_id TEXT PRIMARY KEY,
+                filename TEXT NOT NULL,
+                chat_id TEXT NOT NULL,
+                chunk_count INTEGER DEFAULT 0,
+                file_size INTEGER DEFAULT 0,
+                uploaded_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_conv_client ON conversations(client_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_doc_chat ON documents(chat_id)")
         conn.commit()
         conn.close()
 
-    # ── Global Memory (Markdown) ─────────────────────────────────────
+    # ── Global Memory ────────────────────────────────────────────────
 
     def _ensure_memory_file(self):
         if not self.memory_file.exists():
@@ -144,13 +154,10 @@ class MemoryManager:
         return path.read_text() if path.exists() else ""
 
     def _write_chat_memory(self, chat_id: str, content: str):
-        path = self.chats_dir / f"{chat_id}.md"
-        path.write_text(content)
+        (self.chats_dir / f"{chat_id}.md").write_text(content)
 
     async def update_chat_memory(self, chat_id: str, user_msg: str, assistant_msg: str):
-        """Regenerate this chat's memory file: summary + keywords + facts."""
         from app.core.llm import get_llm
-
         history = self.get_history(chat_id, limit=30)
         conversation_text = "\n".join(
             f"{h['role'].upper()}: {h['content'][:300]}" for h in history
@@ -161,16 +168,16 @@ class MemoryManager:
         llm = get_llm()
         prompt = (
             "Analyze this conversation and return JSON with these exact keys:\n"
-            '{"summary": "2-3 sentence summary of what was discussed", '
-            '"keywords": ["keyword1", "keyword2", ...up to 10], '
-            '"key_facts": ["fact1", "fact2", ...important things said or decided]}\n\n'
-            "Return ONLY valid JSON, nothing else.\n\n"
+            '{"summary": "2-3 sentence summary", '
+            '"keywords": ["kw1", ...up to 10], '
+            '"key_facts": ["fact1", ...]}\n\n'
+            "Return ONLY valid JSON.\n\n"
             f"Conversation:\n{conversation_text[:3000]}"
         )
         try:
             result = await llm.generate(
                 messages=[{"role": "user", "content": prompt}],
-                system_prompt="You extract structured memory from conversations. Return only valid JSON.",
+                system_prompt="Extract structured memory from conversations. Return only valid JSON.",
             )
             content = result.get("content", "")
             if "{" in content:
@@ -191,13 +198,10 @@ class MemoryManager:
                 md += f"## Summary\n{summary}\n\n"
                 md += f"## Keywords\n{', '.join(keywords)}\n\n"
                 if facts:
-                    md += "## Key Facts\n"
-                    for f in facts:
-                        md += f"- {f}\n"
+                    md += "## Key Facts\n" + "".join(f"- {f}\n" for f in facts)
 
                 self._write_chat_memory(chat_id, md)
 
-                # Index the summary into ChromaDB for cross-chat semantic search
                 if summary:
                     await self._index_text(
                         summary,
@@ -209,11 +213,6 @@ class MemoryManager:
             logger.warning(f"Chat memory update failed: {e}")
 
     def search_all_chats(self, query: str, limit: int = 5) -> List[Dict]:
-        """
-        Search all chat memory files.
-        Tries ChromaDB semantic search on indexed summaries first,
-        falls back to keyword scan of .md files.
-        """
         try:
             count = self._collection.count()
             if count > 0:
@@ -225,9 +224,7 @@ class MemoryManager:
                 chroma_hits = {}
                 if results and results["documents"] and results["documents"][0]:
                     for doc, meta, dist in zip(
-                        results["documents"][0],
-                        results["metadatas"][0],
-                        results["distances"][0],
+                        results["documents"][0], results["metadatas"][0], results["distances"][0]
                     ):
                         cid = meta.get("chat_id", "")
                         if cid and cid not in chroma_hits:
@@ -245,14 +242,14 @@ class MemoryManager:
                 if chroma_hits:
                     return sorted(chroma_hits.values(), key=lambda x: x["score"], reverse=True)[:limit]
         except Exception as e:
-            logger.warning(f"ChromaDB chat search failed, falling back to keyword: {e}")
+            logger.warning(f"ChromaDB chat search failed: {e}")
 
         # Keyword fallback
         query_lower = query.lower()
         results = []
         for mem_file in self.chats_dir.glob("*.md"):
             content = mem_file.read_text()
-            score = sum(1 for word in query_lower.split() if word in content.lower())
+            score = sum(1 for w in query_lower.split() if w in content.lower())
             if score == 0:
                 continue
             chat_id = mem_file.stem
@@ -262,6 +259,144 @@ class MemoryManager:
             keywords = content.split("## Keywords")[1].split("##")[0].strip()[:200] if "## Keywords" in content else ""
             results.append({"chat_id": chat_id, "chat_name": chat_name, "score": score, "summary": summary, "keywords": keywords})
         return sorted(results, key=lambda x: x["score"], reverse=True)[:limit]
+
+    # ── Document Search (RAG) ─────────────────────────────────────────
+
+    async def search_documents(
+        self,
+        query: str,
+        chat_id: str,
+        top_k: int = 5,
+    ) -> List[Dict]:
+        """
+        Search document chunks.
+        Priority: current chat's docs → all other docs (by semantic score).
+        Returns results with citation info (filename, page, doc_id).
+        """
+        count = self._collection.count()
+        if count == 0:
+            return []
+
+        # Check if current chat has documents
+        conn = sqlite3.connect(str(self.db_path))
+        chat_docs = conn.execute(
+            "SELECT doc_id, filename FROM documents WHERE chat_id = ?", (chat_id,)
+        ).fetchall()
+        conn.close()
+
+        results = []
+
+        if chat_docs:
+            # Prioritize this chat's documents
+            chat_doc_ids = [r[0] for r in chat_docs]
+            try:
+                res = self._collection.query(
+                    query_texts=[query],
+                    n_results=min(top_k, count),
+                    where={
+                        "$and": [
+                            {"type": {"$eq": "document"}},
+                            {"doc_id": {"$in": chat_doc_ids}},
+                        ]
+                    },
+                )
+                if res and res["documents"] and res["documents"][0]:
+                    for doc, meta, dist in zip(
+                        res["documents"][0], res["metadatas"][0], res["distances"][0]
+                    ):
+                        results.append({
+                            "text": doc,
+                            "filename": meta.get("filename", ""),
+                            "doc_id": meta.get("doc_id", ""),
+                            "page": meta.get("page", 1),
+                            "chat_id": meta.get("chat_id", ""),
+                            "score": round(1 - dist, 3),
+                            "source_type": "linked_doc",
+                        })
+            except Exception as e:
+                logger.warning(f"Chat doc search failed: {e}")
+
+        # Also search all other documents semantically (cross-chat)
+        remaining = top_k - len(results)
+        if remaining > 0:
+            try:
+                where_filter: Dict = {"type": {"$eq": "document"}}
+                if chat_docs:
+                    # Exclude already-found docs
+                    found_ids = [r["doc_id"] for r in results]
+                    if found_ids:
+                        where_filter = {
+                            "$and": [
+                                {"type": {"$eq": "document"}},
+                                {"doc_id": {"$nin": found_ids}},
+                            ]
+                        }
+
+                res = self._collection.query(
+                    query_texts=[query],
+                    n_results=min(remaining, count),
+                    where=where_filter,
+                )
+                if res and res["documents"] and res["documents"][0]:
+                    for doc, meta, dist in zip(
+                        res["documents"][0], res["metadatas"][0], res["distances"][0]
+                    ):
+                        score = round(1 - dist, 3)
+                        # Only include cross-chat docs if reasonably relevant
+                        if score > 0.4:
+                            results.append({
+                                "text": doc,
+                                "filename": meta.get("filename", ""),
+                                "doc_id": meta.get("doc_id", ""),
+                                "page": meta.get("page", 1),
+                                "chat_id": meta.get("chat_id", ""),
+                                "score": score,
+                                "source_type": "cross_chat_doc",
+                            })
+            except Exception as e:
+                logger.warning(f"Cross-chat doc search failed: {e}")
+
+        return sorted(results, key=lambda x: x["score"], reverse=True)[:top_k]
+
+    def format_doc_context(self, doc_results: List[Dict]) -> Tuple[str, List[Dict]]:
+        """
+        Format document chunks for injection into the system prompt.
+        Returns (formatted_context_string, citations_list).
+        Citations are deduplicated by doc_id.
+        """
+        if not doc_results:
+            return "", []
+
+        parts = ["--- RELEVANT DOCUMENT CONTEXT ---"]
+        seen_docs = {}
+
+        for r in doc_results:
+            fname = r.get("filename", "Unknown")
+            page = r.get("page", "?")
+            doc_id = r.get("doc_id", "")
+            source_type = r.get("source_type", "")
+
+            label = f"[From: {fname}, page {page}]"
+            if source_type == "cross_chat_doc":
+                label += " [from another chat]"
+
+            parts.append(f"\n{label}\n{r['text'][:600]}")
+
+            if doc_id not in seen_docs:
+                seen_docs[doc_id] = {
+                    "doc_id": doc_id,
+                    "filename": fname,
+                    "page": page,
+                    "source_type": source_type,
+                }
+
+        parts.append("\n--- END DOCUMENT CONTEXT ---")
+        parts.append(
+            "\nWhen using information from the documents above, "
+            "mention the source filename naturally in your response."
+        )
+
+        return "\n".join(parts), list(seen_docs.values())
 
     # ── Daily Logs ───────────────────────────────────────────────────
 
@@ -285,20 +420,17 @@ class MemoryManager:
     async def auto_capture(self, user_msg: str, assistant_msg: str, client_id: str = "default"):
         if not settings.memory_auto_capture:
             return
-
-        entry = f"**User ({client_id}):** {user_msg[:500]}\n\n**Assistant:** {assistant_msg[:500]}"
-        self.append_daily_log(entry)
-
+        self.append_daily_log(
+            f"**User ({client_id}):** {user_msg[:500]}\n\n**Assistant:** {assistant_msg[:500]}"
+        )
         try:
             await self._extract_and_store_facts(user_msg, assistant_msg)
         except Exception as e:
             logger.warning(f"Fact extraction failed: {e}")
-
         try:
             await self.update_chat_memory(client_id, user_msg, assistant_msg)
         except Exception as e:
             logger.warning(f"Chat memory update failed: {e}")
-
         try:
             await self._auto_name_chat(client_id, user_msg, assistant_msg)
         except Exception as e:
@@ -308,11 +440,9 @@ class MemoryManager:
         from app.core.llm import get_llm
         llm = get_llm()
         prompt = (
-            "Extract personal facts about the USER ONLY from this exchange — things like their preferences, "
-            "habits, goals, opinions, or personal details they revealed. "
-            "Do NOT include general knowledge, definitions, or facts about the world. "
-            "Only include what the user personally said, likes, dislikes, wants, or did.\n\n"
-            'Return JSON: {"facts": ["User likes X", "User wants to..."]} or {"facts": []} if nothing personal.\n\n'
+            "Extract personal facts about the USER ONLY — preferences, habits, goals, opinions, personal details. "
+            "Do NOT include general knowledge or facts about the world.\n\n"
+            'Return JSON: {"facts": ["User likes X"]} or {"facts": []} if nothing personal.\n\n'
             f"User: {user_msg[:300]}\nAssistant: {assistant_msg[:300]}"
         )
         result = await llm.generate(
@@ -327,11 +457,7 @@ class MemoryManager:
                 for fact in data.get("facts", []):
                     if fact.strip():
                         self.append_to_memory("Important Facts", f"- {fact.strip()}")
-                        await self._index_text(
-                            fact.strip(),
-                            source="extracted_fact",
-                            metadata={"type": "user_fact"},
-                        )
+                        await self._index_text(fact.strip(), source="extracted_fact", metadata={"type": "user_fact"})
         except (json.JSONDecodeError, ValueError):
             pass
 
@@ -346,15 +472,13 @@ class MemoryManager:
             return
         from app.core.llm import get_llm
         llm = get_llm()
-        prompt = (
-            "Give this conversation a short title (3-5 words max). "
-            "It should describe the topic, like a chapter title. "
-            "No quotes, no punctuation at the end. Just the title.\n\n"
-            f"User: {user_msg[:200]}\nAssistant: {assistant_msg[:200]}"
-        )
         result = await llm.generate(
-            messages=[{"role": "user", "content": prompt}],
-            system_prompt="You generate short, descriptive chat titles. Respond with only the title, nothing else.",
+            messages=[{"role": "user", "content": (
+                "Give this conversation a short title (3-5 words max). "
+                "Topic-focused, like a chapter title. No quotes, no punctuation at end.\n\n"
+                f"User: {user_msg[:200]}\nAssistant: {assistant_msg[:200]}"
+            )}],
+            system_prompt="Generate short descriptive chat titles. Respond with only the title.",
         )
         name = result.get("content", "").strip().strip('"').strip("'")[:60]
         if name:
@@ -369,61 +493,36 @@ class MemoryManager:
     async def auto_recall(self, query: str, top_k: int = 5) -> str:
         if not settings.memory_auto_recall:
             return ""
-
         parts = []
         mem = self.get_memory_file()
         if mem:
             parts.append(f"## Global Memory\n{mem[:2000]}")
-
         today_log = self.get_daily_log()
         if today_log:
             parts.append(f"## Today's Context\n{today_log[:1500]}")
-
         search_results = await self.search(query, top_k=top_k)
         if search_results:
             snippets = "\n".join([f"- {r['text'][:200]}" for r in search_results])
             parts.append(f"## Relevant Memories\n{snippets}")
-
         return "\n\n".join(parts) if parts else ""
 
     # ── ChromaDB Vector Search ───────────────────────────────────────
 
-    async def _index_text(
-        self,
-        text: str,
-        source: str,
-        metadata: Optional[Dict] = None,
-    ):
-        """
-        Add a single text snippet to ChromaDB.
-        ChromaDB handles embedding generation via the configured embedding function.
-        Uses upsert so re-indexing the same text is idempotent.
-        """
+    async def _index_text(self, text: str, source: str, metadata: Optional[Dict] = None):
         if not text.strip():
             return
-
         doc_id = hashlib.sha256(text.encode()).hexdigest()[:32]
         meta = {"source": source, **(metadata or {})}
-
         try:
-            self._collection.upsert(
-                ids=[doc_id],
-                documents=[text],
-                metadatas=[meta],
-            )
+            self._collection.upsert(ids=[doc_id], documents=[text], metadatas=[meta])
         except Exception as e:
             logger.warning(f"ChromaDB index failed: {e}")
 
     def _index_file(self, filepath: str):
-        """
-        Chunk a file into overlapping windows and index each chunk into ChromaDB.
-        Proper RAG chunking: 400 words per chunk, 50-word overlap.
-        """
         try:
             content = open(filepath).read()
         except Exception:
             return
-
         chunks = _chunk_text(content, chunk_size=400, overlap=50)
         import asyncio
         for i, chunk in enumerate(chunks):
@@ -449,43 +548,29 @@ class MemoryManager:
                     logger.warning(f"Sync index failed: {e}")
 
     async def search(self, query: str, top_k: int = 5) -> List[Dict]:
-        """
-        Semantic search using ChromaDB.
-        ChromaDB returns results sorted by distance (closest first).
-        We convert cosine distance → similarity score (1 - distance).
-        """
+        """Search memory (non-document) chunks."""
         count = self._collection.count()
         if count == 0:
             return []
-
         try:
             results = self._collection.query(
                 query_texts=[query],
                 n_results=min(top_k, count),
+                where={"type": {"$ne": "document"}},
             )
         except Exception as e:
             logger.warning(f"ChromaDB search failed: {e}")
             return []
-
         if not results or not results["documents"] or not results["documents"][0]:
             return []
+        return [
+            {"text": doc, "source": meta.get("source", ""), "score": round(1 - dist, 3), "metadata": meta}
+            for doc, meta, dist in zip(
+                results["documents"][0], results["metadatas"][0], results["distances"][0]
+            )
+        ]
 
-        output = []
-        for doc, meta, dist in zip(
-            results["documents"][0],
-            results["metadatas"][0],
-            results["distances"][0],
-        ):
-            output.append({
-                "text": doc,
-                "source": meta.get("source", ""),
-                "score": round(1 - dist, 3),
-                "metadata": meta,
-            })
-
-        return output  # ChromaDB already returns closest-first
-
-    # ── Conversation History (SQLite) ────────────────────────────────
+    # ── Conversation History ─────────────────────────────────────────
 
     def save_message(self, client_id: str, role: str, content: str):
         conn = sqlite3.connect(str(self.db_path))
@@ -511,7 +596,7 @@ class MemoryManager:
         conn.commit()
         conn.close()
 
-    # ── Memory Tools (exposed to agent) ─────────────────────────────
+    # ── Memory Tools ─────────────────────────────────────────────────
 
     async def memory_store(self, content: str, tags: str = "") -> str:
         self.append_to_memory("Important Facts", f"- {content}")
