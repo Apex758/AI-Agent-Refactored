@@ -1,4 +1,5 @@
 """Application configuration."""
+import os
 from pydantic_settings import BaseSettings
 from typing import Optional
 
@@ -7,6 +8,7 @@ class Settings(BaseSettings):
     # LLM
     openai_api_key: Optional[str] = None
     anthropic_api_key: Optional[str] = None
+    openrouter_api_key: Optional[str] = None
     llm_provider: str = "openai"
     llm_model: str = "gpt-4o"
     llm_temperature: float = 0.7
@@ -39,7 +41,7 @@ class Settings(BaseSettings):
     max_tool_calls: int = 10
 
     class Config:
-        env_file = ".env"
+        env_file = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), ".env")
         case_sensitive = False
 
 

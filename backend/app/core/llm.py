@@ -1,5 +1,5 @@
 """
-LLM abstraction layer. Supports OpenAI and Anthropic via API keys.
+LLM abstraction layer. Supports OpenAI, Anthropic, and OpenRouter via API keys.
 Swap providers by changing LLM_PROVIDER in .env.
 """
 from typing import List, Dict, Optional, AsyncGenerator
@@ -17,7 +17,7 @@ class LLMMessage:
 
 
 class LLM:
-    """Unified LLM interface for OpenAI and Anthropic."""
+    """Unified LLM interface for OpenAI, Anthropic, and OpenRouter."""
 
     def __init__(self):
         self.provider = settings.llm_provider
@@ -25,17 +25,38 @@ class LLM:
         self.temperature = settings.llm_temperature
         self.max_tokens = settings.llm_max_tokens
         self._client = None
+        # DEBUG: Log the provider being used
+        from app.core.logging import logger
+        logger.info(f"LLM initialized: provider={self.provider}, model={self.model}")
 
     def _get_openai_client(self):
+        from app.core.logging import logger
+        logger.info(f"_get_openai_client called, self._client is None: {self._client is None}")
         if self._client is None:
             from openai import AsyncOpenAI
             self._client = AsyncOpenAI(api_key=settings.openai_api_key)
+            logger.info("Created new OpenAI client")
         return self._client
 
     def _get_anthropic_client(self):
+        from app.core.logging import logger
+        logger.info(f"_get_anthropic_client called, self._client is None: {self._client is None}")
         if self._client is None:
             from anthropic import AsyncAnthropic
             self._client = AsyncAnthropic(api_key=settings.anthropic_api_key)
+            logger.info("Created new Anthropic client")
+        return self._client
+
+    def _get_openrouter_client(self):
+        from app.core.logging import logger
+        logger.info(f"_get_openrouter_client called, self._client is None: {self._client is None}")
+        if self._client is None:
+            from openai import AsyncOpenAI
+            self._client = AsyncOpenAI(
+                base_url="https://openrouter.ai/api/v1",
+                api_key=settings.openrouter_api_key,
+            )
+            logger.info("Created new OpenRouter client")
         return self._client
 
     async def generate(
@@ -47,6 +68,8 @@ class LLM:
         """Generate a complete response."""
         if self.provider == "anthropic":
             return await self._generate_anthropic(messages, system_prompt, tools)
+        elif self.provider == "openrouter":
+            return await self._generate_openrouter(messages, system_prompt, tools)
         return await self._generate_openai(messages, system_prompt, tools)
 
     async def stream(
@@ -57,6 +80,9 @@ class LLM:
         """Stream response tokens."""
         if self.provider == "anthropic":
             async for token in self._stream_anthropic(messages, system_prompt):
+                yield token
+        elif self.provider == "openrouter":
+            async for token in self._stream_openrouter(messages, system_prompt):
                 yield token
         else:
             async for token in self._stream_openai(messages, system_prompt):
@@ -169,6 +195,61 @@ class LLM:
                 "input_schema": fn.get("parameters", {"type": "object", "properties": {}}),
             })
         return anthropic_tools
+
+    # --- OpenRouter ---
+    async def _generate_openrouter(self, messages, system_prompt, tools=None):
+        """Generate using OpenRouter (OpenAI-compatible API)."""
+        client = self._get_openrouter_client()
+        msgs = []
+        if system_prompt:
+            msgs.append({"role": "system", "content": system_prompt})
+        msgs.extend(messages)
+
+        kwargs = dict(
+            model=self.model,
+            messages=msgs,
+            temperature=self.temperature,
+            max_tokens=self.max_tokens,
+        )
+        if tools:
+            kwargs["tools"] = tools
+            kwargs["tool_choice"] = "auto"
+
+        response = await client.chat.completions.create(**kwargs)
+        msg = response.choices[0].message
+
+        # Handle tool calls
+        if msg.tool_calls:
+            return {"type": "tool_calls", "tool_calls": [
+                {
+                    "id": tc.id,
+                    "name": tc.function.name,
+                    "arguments": tc.function.arguments,
+                }
+                for tc in msg.tool_calls
+            ], "content": msg.content or ""}
+
+        return {"type": "text", "content": msg.content or ""}
+
+    async def _stream_openrouter(self, messages, system_prompt):
+        """Stream using OpenRouter (OpenAI-compatible API)."""
+        client = self._get_openrouter_client()
+        msgs = []
+        if system_prompt:
+            msgs.append({"role": "system", "content": system_prompt})
+        msgs.extend(messages)
+
+        stream = await client.chat.completions.create(
+            model=self.model,
+            messages=msgs,
+            temperature=self.temperature,
+            max_tokens=self.max_tokens,
+            stream=True,
+        )
+        async for chunk in stream:
+            delta = chunk.choices[0].delta
+            if delta.content:
+                yield delta.content
 
 
 # Singleton
