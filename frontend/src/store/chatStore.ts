@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { ChatStore, Message, Chat, Document } from '@/types'
+import type { ChatStore, Message, Chat, Document, VoiceState } from '@/types'
 
 const genId = () => Math.random().toString(36).slice(2, 12)
 
@@ -13,6 +13,12 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   isProcessing: false,
   streamingContent: '',
   error: null,
+  voiceState: {
+    isRecording: false,
+    isPlaying: false,
+    audioLevel: 0,
+    localStream: null,
+  },
 
   // ── Config ─────────────────────────────────────────────────────
 
@@ -210,6 +216,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
 
   setProcessing: (v) => set({ isProcessing: v }),
   setError: (e) => set({ error: e, isProcessing: false }),
+  setVoiceState: (partial) => set(s => ({ voiceState: { ...s.voiceState, ...partial } })),
 
   clearChat: () => {
     const { currentChatId } = get()

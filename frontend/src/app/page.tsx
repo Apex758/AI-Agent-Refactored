@@ -4,6 +4,7 @@ import { useState, useRef, useEffect, FormEvent, useCallback } from 'react'
 import { useChatStore } from '@/store/chatStore'
 import { useWebSocket } from '@/hooks/useWebSocket'
 import { useVoice } from '@/hooks/useVoice'
+import CenterStage from '@/components/CenterStage'
 import type { Document, Citation } from '@/types'
 
 // ── URL → clickable links ─────────────────────────────────────────
@@ -196,7 +197,6 @@ function VoiceOrb({ isListening, isSpeaking }: { isListening: boolean; isSpeakin
         className="relative flex items-center justify-center"
         style={{ width: 64, height: 64 }}
       >
-        {/* Pulse rings */}
         {[0, 1, 2].map(i => (
           <div
             key={i}
@@ -274,7 +274,6 @@ export default function Home() {
   const callbackRef    = useRef<(text: string) => void>(() => {})
 
   // ── Voice ──────────────────────────────────────────────────────
-  // Keep a stable callback ref so useVoice's closure stays fresh
   const voice = useVoice(useCallback((text: string) => callbackRef.current(text), []))
 
   useEffect(() => {
@@ -286,7 +285,6 @@ export default function Home() {
     }
   }, [currentChatId, isProcessing, sendMessage, send])
 
-  // Auto-speak new assistant messages
   useEffect(() => {
     if (!voiceEnabled) return
     const last = currentMessages[currentMessages.length - 1]
@@ -296,7 +294,6 @@ export default function Home() {
     }
   }, [currentMessages, voiceEnabled, voice])
 
-  // Show interim transcript in input while listening
   useEffect(() => {
     if (voice.interimText) setInput(voice.interimText)
   }, [voice.interimText])
@@ -324,7 +321,6 @@ export default function Home() {
   const handleSend = (e: FormEvent) => {
     e.preventDefault()
     if (!input.trim() || isProcessing || !currentChatId) return
-    // Stop TTS when user sends a new message
     voice.stopSpeaking()
     sendMessage(input.trim())
     send(input.trim())
@@ -386,6 +382,67 @@ export default function Home() {
     }
   }
 
+  // ── Header fragments for CenterStage ───────────────────────────
+
+  const headerLeft = (
+    <>
+      <button
+        onClick={e => { e.stopPropagation(); setSidebarOpen(o => !o) }}
+        className="btn-outline w-8 h-8 flex items-center justify-center text-sm"
+        title="Toggle sidebar"
+      >☰</button>
+      <span
+        className="text-sm font-medium truncate max-w-xs"
+        style={{ color: 'var(--text-secondary)' }}
+      >
+        {currentChatId
+          ? (chats.find(c => c.id === currentChatId)?.name || 'Chat')
+          : 'Select a chat'}
+      </span>
+    </>
+  )
+
+  const headerRight = (
+    <>
+      {currentChatId && (
+        <>
+          <button
+            onClick={e => { e.stopPropagation(); loadMemory() }}
+            className="btn-outline px-3 py-1.5 text-xs"
+          >Memory</button>
+          <button
+            onClick={e => { e.stopPropagation(); clearChat() }}
+            className="btn-outline px-3 py-1.5 text-xs"
+          >Clear</button>
+        </>
+      )}
+      <button
+        onClick={e => { e.stopPropagation(); setDocPanelOpen(o => !o) }}
+        className="px-3 py-1.5 text-xs rounded-lg flex items-center gap-1.5 transition"
+        style={docPanelOpen ? {
+          background: 'var(--gold-muted)',
+          border: '1.5px solid var(--gold-border)',
+          color: 'var(--seal-brown)',
+        } : {
+          border: '1.5px solid var(--border-strong)',
+          color: 'var(--text-secondary)',
+          background: 'transparent',
+        }}
+        title="Toggle documents"
+      >
+        📎
+        {currentDocuments.length > 0 && (
+          <span
+            className="text-white rounded-full w-4 h-4 flex items-center justify-center"
+            style={{ background: 'var(--seal-brown)', fontSize: 10 }}
+          >
+            {currentDocuments.length}
+          </span>
+        )}
+      </button>
+    </>
+  )
+
   return (
     <main className="flex h-screen overflow-hidden" style={{ background: 'var(--bg-main)' }}>
 
@@ -410,12 +467,11 @@ export default function Home() {
       {/* ── Voice orb ── */}
       <VoiceOrb isListening={voice.isListening} isSpeaking={voice.isSpeaking} />
 
-      {/* ── Left sidebar (emerald) ── */}
+      {/* ── Left sidebar (emerald) — UNCHANGED ── */}
       <aside
         className="sidebar sidebar-collapse flex-shrink-0 flex flex-col"
         style={{ width: sidebarOpen ? 224 : 0 }}
       >
-        {/* Brand */}
         <div
           className="p-4 flex items-center gap-3 flex-shrink-0"
           style={{ borderBottom: '1px solid rgba(255,255,255,.08)' }}
@@ -441,7 +497,6 @@ export default function Home() {
           </button>
         </div>
 
-        {/* Chat list */}
         <div className="flex-1 overflow-y-auto scrollbar-thin px-2 py-2 space-y-0.5">
           {chats.length === 0 && (
             <p className="text-xs text-center mt-8" style={{ color: 'rgba(245,240,235,.3)' }}>
@@ -504,259 +559,221 @@ export default function Home() {
         </div>
       </aside>
 
-      {/* ── Center: Chat area ── */}
-      <div className="flex-1 flex flex-col min-w-0" onClick={handleChatAreaClick}>
-
-        {/* Header */}
-        <header className="chat-header flex items-center justify-between px-5 py-3 flex-shrink-0 z-10">
-          <div className="flex items-center gap-3">
-            <button
-              onClick={e => { e.stopPropagation(); setSidebarOpen(o => !o) }}
-              className="btn-outline w-8 h-8 flex items-center justify-center text-sm"
-              title="Toggle sidebar"
-            >☰</button>
-            <span
-              className="text-sm font-medium truncate max-w-xs"
-              style={{ color: 'var(--text-secondary)' }}
-            >
-              {currentChatId
-                ? (chats.find(c => c.id === currentChatId)?.name || 'Chat')
-                : 'Select a chat'}
-            </span>
-          </div>
-
-          <div className="flex gap-2 items-center">
-            {currentChatId && (
-              <>
-                <button
-                  onClick={e => { e.stopPropagation(); loadMemory() }}
-                  className="btn-outline px-3 py-1.5 text-xs"
-                >Memory</button>
-                <button
-                  onClick={e => { e.stopPropagation(); clearChat() }}
-                  className="btn-outline px-3 py-1.5 text-xs"
-                >Clear</button>
-              </>
-            )}
-            <button
-              onClick={e => { e.stopPropagation(); setDocPanelOpen(o => !o) }}
-              className="px-3 py-1.5 text-xs rounded-lg flex items-center gap-1.5 transition"
-              style={docPanelOpen ? {
-                background: 'var(--gold-muted)',
-                border: '1.5px solid var(--gold-border)',
-                color: 'var(--seal-brown)',
-              } : {
-                border: '1.5px solid var(--border-strong)',
-                color: 'var(--text-secondary)',
-                background: 'transparent',
-              }}
-              title="Toggle documents"
-            >
-              📎
-              {currentDocuments.length > 0 && (
-                <span
-                  className="text-white rounded-full w-4 h-4 flex items-center justify-center"
-                  style={{ background: 'var(--seal-brown)', fontSize: 10 }}
-                >
-                  {currentDocuments.length}
-                </span>
-              )}
-            </button>
-          </div>
-        </header>
-
-        {/* Messages */}
-        <div className="flex-1 overflow-y-auto scrollbar-thin px-6 py-5 space-y-4">
-          {!currentChatId ? (
-            <div className="flex flex-col items-center justify-center h-full gap-4">
-              <div
-                className="w-16 h-16 rounded-2xl flex items-center justify-center font-display text-3xl mb-1"
-                style={{ background: 'var(--bg-raised)', border: '1px solid var(--border)', color: 'var(--text-muted)' }}
-              >
-                {agentName[0]?.toUpperCase()}
-              </div>
-              <p className="text-sm font-medium" style={{ color: 'var(--text-secondary)' }}>
-                Start a new conversation
-              </p>
-              <button
-                onClick={e => { e.stopPropagation(); createChat() }}
-                className="btn-send px-5 py-2.5 text-sm"
-              >
-                New Chat
-              </button>
-            </div>
-          ) : currentMessages.length === 0 && !streamingContent ? (
-            <div className="flex items-center justify-center h-full">
-              <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
-                Send a message to start…
-              </p>
-            </div>
-          ) : (
-            <>
-              {currentMessages.map(msg => (
-                <div
-                  key={msg.id}
-                  className={`flex flex-col ${msg.role === 'user' ? 'items-end' : 'items-start'}`}
-                >
+      {/* ── Center: CenterStage (Chat + Whiteboard) ── */}
+      <div onClick={handleChatAreaClick} className="flex-1 min-w-0 h-full">
+        <CenterStage
+          chatId={currentChatId}
+          headerLeft={headerLeft}
+          headerRight={headerRight}
+          voice={voice}
+          isProcessing={isProcessing}
+          onMicClick={handleMicClick}
+        >
+          {/* ── Chat content (always mounted inside CenterStage) ── */}
+          <div className="flex flex-col h-full">
+            {/* Messages */}
+            <div className="flex-1 overflow-y-auto scrollbar-thin px-6 py-5 space-y-4">
+              {!currentChatId ? (
+                <div className="flex flex-col items-center justify-center h-full gap-4">
                   <div
-                    className={`max-w-[78%] px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap ${
-                      msg.role === 'user'
-                        ? 'bubble-user'
-                        : msg.role === 'system'
-                        ? 'bubble-assistant italic'
-                        : 'bubble-assistant'
-                    }`}
+                    className="w-16 h-16 rounded-2xl flex items-center justify-center font-display text-3xl mb-1"
+                    style={{ background: 'var(--bg-raised)', border: '1px solid var(--border)', color: 'var(--text-muted)' }}
                   >
-                    <MessageContent content={msg.content} />
+                    {agentName[0]?.toUpperCase()}
                   </div>
-                  {msg.role === 'assistant' && msg.citations && msg.citations.length > 0 && (
-                    <div className="flex flex-wrap gap-1 mt-1.5 max-w-[78%]">
-                      {msg.citations.map((c, i) => <CitationBadge key={i} citation={c} />)}
+                  <p className="text-sm font-medium" style={{ color: 'var(--text-secondary)' }}>
+                    Start a new conversation
+                  </p>
+                  <button
+                    onClick={e => { e.stopPropagation(); createChat() }}
+                    className="btn-send px-5 py-2.5 text-sm"
+                  >
+                    New Chat
+                  </button>
+                </div>
+              ) : currentMessages.length === 0 && !streamingContent ? (
+                <div className="flex items-center justify-center h-full">
+                  <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
+                    Send a message to start…
+                  </p>
+                </div>
+              ) : (
+                <>
+                  {currentMessages.map(msg => (
+                    <div
+                      key={msg.id}
+                      className={`flex flex-col ${msg.role === 'user' ? 'items-end' : 'items-start'}`}
+                    >
+                      {/* Attachment image (whiteboard snapshot) */}
+                      {msg.attachment?.type === 'image' && (
+                        <div className={`max-w-[78%] mb-1 ${msg.role === 'user' ? 'self-end' : 'self-start'}`}>
+                          <img
+                            src={msg.attachment.dataUrl}
+                            alt={msg.attachment.name}
+                            className="rounded-xl border max-h-60 object-contain"
+                            style={{ borderColor: 'var(--border-strong)' }}
+                          />
+                        </div>
+                      )}
+                      <div
+                        className={`max-w-[78%] px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap ${
+                          msg.role === 'user'
+                            ? 'bubble-user'
+                            : msg.role === 'system'
+                            ? 'bubble-assistant italic'
+                            : 'bubble-assistant'
+                        }`}
+                      >
+                        <MessageContent content={msg.content} />
+                      </div>
+                      {msg.role === 'assistant' && msg.citations && msg.citations.length > 0 && (
+                        <div className="flex flex-wrap gap-1 mt-1.5 max-w-[78%]">
+                          {msg.citations.map((c, i) => <CitationBadge key={i} citation={c} />)}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+
+                  {streamingContent && (
+                    <div className="flex flex-col items-start">
+                      <div className="bubble-assistant max-w-[78%] px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap">
+                        <MessageContent content={streamingContent} />
+                        <span className="stream-cursor" />
+                      </div>
                     </div>
                   )}
-                </div>
-              ))}
 
-              {streamingContent && (
-                <div className="flex flex-col items-start">
-                  <div className="bubble-assistant max-w-[78%] px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap">
-                    <MessageContent content={streamingContent} />
-                    <span className="stream-cursor" />
-                  </div>
-                </div>
-              )}
-
-              {isProcessing && !streamingContent && (
-                <div className="flex justify-start">
-                  <div className="bubble-assistant px-4 py-3">
-                    <div className="flex gap-1.5 items-center h-5">
-                      {[0, 1, 2].map(i => (
-                        <span
-                          key={i}
-                          className="typing-dot"
-                          style={{ animation: `pulse-dot 1.4s ease-in-out ${i * 0.2}s infinite` }}
-                        />
-                      ))}
+                  {isProcessing && !streamingContent && (
+                    <div className="flex justify-start">
+                      <div className="bubble-assistant px-4 py-3">
+                        <div className="flex gap-1.5 items-center h-5">
+                          {[0, 1, 2].map(i => (
+                            <span
+                              key={i}
+                              className="typing-dot"
+                              style={{ animation: `pulse-dot 1.4s ease-in-out ${i * 0.2}s infinite` }}
+                            />
+                          ))}
+                        </div>
+                      </div>
                     </div>
+                  )}
+                </>
+              )}
+
+              {error && (
+                <div className="flex justify-center">
+                  <div
+                    className="text-sm rounded-xl px-4 py-2"
+                    style={{
+                      background: 'rgba(88,31,11,.1)',
+                      color: 'var(--seal-brown)',
+                      border: '1px solid rgba(88,31,11,.2)',
+                    }}
+                  >
+                    {error}
                   </div>
                 </div>
               )}
-            </>
-          )}
-
-          {error && (
-            <div className="flex justify-center">
-              <div
-                className="text-sm rounded-xl px-4 py-2"
-                style={{
-                  background: 'rgba(88,31,11,.1)',
-                  color: 'var(--seal-brown)',
-                  border: '1px solid rgba(88,31,11,.2)',
-                }}
-              >
-                {error}
-              </div>
+              <div ref={bottomRef} />
             </div>
-          )}
-          <div ref={bottomRef} />
-        </div>
 
-        {/* Input bar */}
-        <form
-          onSubmit={handleSend}
-          onClick={e => e.stopPropagation()}
-          className="px-6 py-4 flex-shrink-0"
-          style={{ borderTop: '1px solid var(--border)' }}
-        >
-          {uploadError && (
-            <p className="text-xs mb-2 truncate" style={{ color: 'var(--seal-brown)' }}>
-              {uploadError}
-            </p>
-          )}
-          <div className="flex gap-2 items-center">
-            <input
-              value={input}
-              onChange={e => setInput(e.target.value)}
-              placeholder={
-                voice.isListening
-                  ? 'Listening…'
-                  : currentChatId
-                  ? `Message ${agentName}…`
-                  : 'Create or select a chat first'
-              }
-              disabled={isProcessing || !currentChatId}
-              className="chat-input flex-1 px-4 py-3 text-sm disabled:opacity-50"
-              style={voice.isListening ? { borderColor: 'rgba(220,60,60,.6)', boxShadow: '0 0 0 3px rgba(220,60,60,.12)' } : {}}
-            />
-
-            {/* Mic button */}
-            {voice.supported && currentChatId && (
-              <button
-                type="button"
-                onClick={handleMicClick}
-                disabled={isProcessing && !voice.isListening && !voice.isSpeaking}
-                className="flex-shrink-0 w-11 h-11 flex items-center justify-center rounded-xl transition-all text-lg"
-                title={
-                  voice.isListening ? 'Stop listening'
-                  : voice.isSpeaking ? 'Stop speaking'
-                  : 'Voice input'
-                }
-                style={{
-                  background: voice.isListening
-                    ? 'rgba(200,50,50,.9)'
-                    : voice.isSpeaking
-                    ? 'rgba(196,178,94,.85)'
-                    : 'var(--bg-raised)',
-                  border: `1.5px solid ${
-                    voice.isListening ? 'rgba(220,60,60,.6)'
-                    : voice.isSpeaking ? 'var(--gold-border)'
-                    : 'var(--border-strong)'
-                  }`,
-                  color: (voice.isListening || voice.isSpeaking) ? '#fff' : 'var(--text-muted)',
-                  boxShadow: voice.isListening
-                    ? '0 0 12px rgba(220,60,60,.4)'
-                    : voice.isSpeaking
-                    ? '0 0 12px rgba(196,178,94,.3)'
-                    : 'none',
-                }}
-              >
-                {voice.isListening ? '⏹' : voice.isSpeaking ? '🔊' : '🎙️'}
-              </button>
-            )}
-
-            {/* Voice auto-speak toggle */}
-            {voice.supported && currentChatId && (
-              <button
-                type="button"
-                onClick={() => {
-                  const next = !voiceEnabled
-                  setVoiceEnabled(next)
-                  if (!next) voice.stopSpeaking()
-                }}
-                className="flex-shrink-0 w-11 h-11 flex items-center justify-center rounded-xl transition-all text-xs font-semibold"
-                title={voiceEnabled ? 'Disable auto-speak' : 'Enable auto-speak'}
-                style={{
-                  background: voiceEnabled ? 'var(--gold-muted)' : 'var(--bg-raised)',
-                  border: `1.5px solid ${voiceEnabled ? 'var(--gold-border)' : 'var(--border-strong)'}`,
-                  color: voiceEnabled ? 'var(--seal-brown)' : 'var(--text-muted)',
-                }}
-              >
-                {voiceEnabled ? '🔈' : '🔇'}
-              </button>
-            )}
-
-            <button
-              type="submit"
-              disabled={isProcessing || !input.trim() || !currentChatId}
-              className="btn-send px-6 py-3 text-sm flex-shrink-0"
+            {/* Input bar */}
+            <form
+              onSubmit={handleSend}
+              onClick={e => e.stopPropagation()}
+              className="px-6 py-4 flex-shrink-0"
+              style={{ borderTop: '1px solid var(--border)' }}
             >
-              Send
-            </button>
+              {uploadError && (
+                <p className="text-xs mb-2 truncate" style={{ color: 'var(--seal-brown)' }}>
+                  {uploadError}
+                </p>
+              )}
+              <div className="flex gap-2 items-center">
+                <input
+                  value={input}
+                  onChange={e => setInput(e.target.value)}
+                  placeholder={
+                    voice.isListening
+                      ? 'Listening…'
+                      : currentChatId
+                      ? `Message ${agentName}…`
+                      : 'Create or select a chat first'
+                  }
+                  disabled={isProcessing || !currentChatId}
+                  className="chat-input flex-1 px-4 py-3 text-sm disabled:opacity-50"
+                  style={voice.isListening ? { borderColor: 'rgba(220,60,60,.6)', boxShadow: '0 0 0 3px rgba(220,60,60,.12)' } : {}}
+                />
+
+                {voice.supported && currentChatId && (
+                  <button
+                    type="button"
+                    onClick={handleMicClick}
+                    disabled={isProcessing && !voice.isListening && !voice.isSpeaking}
+                    className="flex-shrink-0 w-11 h-11 flex items-center justify-center rounded-xl transition-all text-lg"
+                    title={
+                      voice.isListening ? 'Stop listening'
+                      : voice.isSpeaking ? 'Stop speaking'
+                      : 'Voice input'
+                    }
+                    style={{
+                      background: voice.isListening
+                        ? 'rgba(200,50,50,.9)'
+                        : voice.isSpeaking
+                        ? 'rgba(196,178,94,.85)'
+                        : 'var(--bg-raised)',
+                      border: `1.5px solid ${
+                        voice.isListening ? 'rgba(220,60,60,.6)'
+                        : voice.isSpeaking ? 'var(--gold-border)'
+                        : 'var(--border-strong)'
+                      }`,
+                      color: (voice.isListening || voice.isSpeaking) ? '#fff' : 'var(--text-muted)',
+                      boxShadow: voice.isListening
+                        ? '0 0 12px rgba(220,60,60,.4)'
+                        : voice.isSpeaking
+                        ? '0 0 12px rgba(196,178,94,.3)'
+                        : 'none',
+                    }}
+                  >
+                    {voice.isListening ? '⏹' : voice.isSpeaking ? '🔊' : '🎙️'}
+                  </button>
+                )}
+
+                {voice.supported && currentChatId && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const next = !voiceEnabled
+                      setVoiceEnabled(next)
+                      if (!next) voice.stopSpeaking()
+                    }}
+                    className="flex-shrink-0 w-11 h-11 flex items-center justify-center rounded-xl transition-all text-xs font-semibold"
+                    title={voiceEnabled ? 'Disable auto-speak' : 'Enable auto-speak'}
+                    style={{
+                      background: voiceEnabled ? 'var(--gold-muted)' : 'var(--bg-raised)',
+                      border: `1.5px solid ${voiceEnabled ? 'var(--gold-border)' : 'var(--border-strong)'}`,
+                      color: voiceEnabled ? 'var(--seal-brown)' : 'var(--text-muted)',
+                    }}
+                  >
+                    {voiceEnabled ? '🔈' : '🔇'}
+                  </button>
+                )}
+
+                <button
+                  type="submit"
+                  disabled={isProcessing || !input.trim() || !currentChatId}
+                  className="btn-send px-6 py-3 text-sm flex-shrink-0"
+                >
+                  Send
+                </button>
+              </div>
+            </form>
           </div>
-        </form>
+        </CenterStage>
       </div>
 
-      {/* ── Right: Doc panel (dark emerald) ── */}
+      {/* ── Right: Doc panel (dark emerald) — UNCHANGED ── */}
       {currentChatId && (
         <aside
           className="sidebar-collapse flex-shrink-0"

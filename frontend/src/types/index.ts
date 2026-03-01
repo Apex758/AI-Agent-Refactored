@@ -7,12 +7,19 @@ export interface Citation {
   source_type: 'linked_doc' | 'cross_chat_doc'
 }
 
+export interface Attachment {
+  type: 'image'
+  dataUrl: string
+  name: string
+}
+
 export interface Message {
   id: string
   role: MessageRole
   content: string
   timestamp: number
   citations?: Citation[]
+  attachment?: Attachment
 }
 
 export interface Chat {
@@ -36,6 +43,13 @@ export interface WSMessage {
   citations?: Citation[]
 }
 
+export interface VoiceState {
+  isRecording: boolean
+  isPlaying: boolean
+  audioLevel: number
+  localStream: MediaStream | null
+}
+
 export interface ChatStore {
   agentName: string
   chats: Chat[]
@@ -46,6 +60,7 @@ export interface ChatStore {
   isProcessing: boolean
   streamingContent: string
   error: string | null
+  voiceState: VoiceState
 
   loadConfig: () => Promise<void>
   loadChats: () => Promise<void>
@@ -66,5 +81,6 @@ export interface ChatStore {
   finalizeStreaming: () => void
   setProcessing: (v: boolean) => void
   setError: (e: string | null) => void
+  setVoiceState: (state: Partial<VoiceState>) => void
   clearChat: () => void
 }
