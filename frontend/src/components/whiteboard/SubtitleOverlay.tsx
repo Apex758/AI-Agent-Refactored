@@ -10,6 +10,27 @@ interface SubtitleOverlayProps {
 
 export default function SubtitleOverlay({ text, playback }: SubtitleOverlayProps) {
   const [visible, setVisible] = useState(false)
+  const [displayWords, setDisplayWords] = useState<string[]>([])
+  const [fadeKey, setFadeKey] = useState(0) // Used to trigger fade animations
+
+  // Update display when words change
+  useEffect(() => {
+    if (playback.visibleWords && playback.visibleWords.length > 0) {
+      setDisplayWords(playback.visibleWords)
+    } else if (text) {
+      // Fallback: split text into words
+      setDisplayWords(text.split(/\s+/).filter(w => w))
+    } else {
+      setDisplayWords([])
+    }
+  }, [playback.visibleWords, text])
+
+  // Trigger fade animation when transitioning between words
+  useEffect(() => {
+    if (playback.isFading) {
+      setFadeKey(k => k + 1)
+    }
+  }, [playback.isFading, playback.currentWordIndex])
 
   useEffect(() => {
     if (text && playback.isPlaying) {
@@ -21,7 +42,7 @@ export default function SubtitleOverlay({ text, playback }: SubtitleOverlayProps
     }
   }, [text, playback.isPlaying])
 
-  if (!visible && !text) return null
+  if (!visible && displayWords.length === 0) return null
 
   return (
     <div
@@ -31,7 +52,7 @@ export default function SubtitleOverlay({ text, playback }: SubtitleOverlayProps
         left: '50%',
         transform: 'translateX(-50%)',
         zIndex: 700,
-        maxWidth: '70%',
+        maxWidth: '80%',
         pointerEvents: 'none',
       }}
     >
@@ -41,7 +62,7 @@ export default function SubtitleOverlay({ text, playback }: SubtitleOverlayProps
           display: 'flex',
           justifyContent: 'center',
           gap: 4,
-          marginBottom: 6,
+          marginBottom: 8,
         }}>
           {Array.from({ length: playback.totalSubtitles }).map((_, i) => (
             <div
@@ -60,29 +81,55 @@ export default function SubtitleOverlay({ text, playback }: SubtitleOverlayProps
         </div>
       )}
 
-      {/* Subtitle text */}
+      {/* Subtitle text with word-by-word display */}
       <div
+        key={fadeKey} // Key change triggers fade animation
         style={{
           background: 'rgba(15, 23, 42, 0.92)',
           backdropFilter: 'blur(12px)',
           borderRadius: 14,
-          padding: '12px 20px',
+          padding: '14px 24px',
           border: '1px solid rgba(196, 178, 94, 0.3)',
           boxShadow: '0 8px 32px rgba(0, 0, 0, 0.4)',
           textAlign: 'center',
-          opacity: text ? 1 : 0,
-          transition: 'opacity 0.3s ease',
+          opacity: displayWords.length > 0 ? 1 : 0,
+          transition: 'opacity 0.15s ease-out', // Quick fade for word transitions
         }}
       >
         <p style={{
           color: '#f1f5f9',
-          fontSize: 15,
-          lineHeight: 1.5,
+          fontSize: 16,
+          lineHeight: 1.6,
           margin: 0,
           fontWeight: 400,
           letterSpacing: '0.01em',
         }}>
-          {text}
+          {displayWords.map((word, index) => {
+            const isCurrentWord = playback.currentWordIndex === index
+            const isPastWord = index < playback.currentWordIndex
+            
+            return (
+              <span
+                key={index}
+                style={{
+                  display: 'inline-block',
+                  marginRight: '0.25em',
+                  // Highlight current word being spoken
+                  color: isCurrentWord
+                    ? 'var(--vegas-gold)'
+                    : isPastWord
+                      ? '#e2e8f0'
+                      : '#94a3b8',
+                  fontWeight: isCurrentWord ? 600 : 400,
+                  transform: isCurrentWord ? 'scale(1.05)' : 'scale(1)',
+                  transition: 'color 0.1s, transform 0.1s, opacity 0.15s',
+                  opacity: playback.isFading && isPastWord ? 0.7 : 1,
+                }}
+              >
+                {word}
+              </span>
+            )
+          })}
         </p>
       </div>
     </div>

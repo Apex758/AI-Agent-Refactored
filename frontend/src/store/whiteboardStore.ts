@@ -43,6 +43,11 @@ export const useWhiteboardStore = create<WhiteboardStore>((set, get) => ({
     isPlaying: false,
     currentIndex: 0,
     totalSubtitles: 0,
+    currentWordIndex: 0,
+    totalWords: 0,
+    currentWord: '',
+    visibleWords: [],
+    isFading: false,
   },
 
   setEditor: (editor) => set({ editorRef: editor }),
@@ -379,7 +384,16 @@ export const useWhiteboardStore = create<WhiteboardStore>((set, get) => ({
       onSpeak: onSpeak,
       onComplete: () => {
         set({
-          playbackState: { isPlaying: false, currentIndex: 0, totalSubtitles: 0 },
+          playbackState: {
+            isPlaying: false,
+            currentIndex: 0,
+            totalSubtitles: 0,
+            currentWordIndex: 0,
+            totalWords: 0,
+            currentWord: '',
+            visibleWords: [],
+            isFading: false,
+          },
           currentSubtitle: ''
         })
         currentPlayer = null
@@ -396,7 +410,16 @@ export const useWhiteboardStore = create<WhiteboardStore>((set, get) => ({
       currentPlayer = null
     }
     set({
-      playbackState: { isPlaying: false, currentIndex: 0, totalSubtitles: 0 },
+      playbackState: {
+        isPlaying: false,
+        currentIndex: 0,
+        totalSubtitles: 0,
+        currentWordIndex: 0,
+        totalWords: 0,
+        currentWord: '',
+        visibleWords: [],
+        isFading: false,
+      },
       currentSubtitle: ''
     })
   },
