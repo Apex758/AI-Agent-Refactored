@@ -1,443 +1,415 @@
+'use client'
+
 import { create } from 'zustand'
-import type { Editor } from 'tldraw'
-import { createShapeId } from 'tldraw'
-import type { ScenePlan } from '@/components/whiteboard/types'
-import type { WhiteboardScene, WhiteboardAction, PlaybackState } from '@/types/whiteboard-sync'
+import { Editor, createShapeId, TLShapeId } from 'tldraw'
 import { ActionPlayer } from '@/components/whiteboard/ActionPlayer'
-import { cleanForWhiteboard, cleanForTTS } from '@/utils/textCleaner'
+import type { WhiteboardScene, WhiteboardAction, PlaybackState } from '@/types/whiteboard-sync'
+
+/* ═══════════════════════════════════════════════════════════════════
+   A4 FRAME GRID LAYOUT
+   
+   Each scene/content block gets its own A4-sized frame.
+   Frames are laid out in a 4-column grid:
+   
+   ┌──────┐ ┌──────┐ ┌──────┐ ┌──────┐
+   │  0   │ │  1   │ │  2   │ │  3   │  ← Row 0
+   └──────┘ └──────┘ └──────┘ └──────┘
+   ┌──────┐ ┌──────┐
+   │  4   │ │  5   │ ...                 ← Row 1
+   └──────┘ └──────┘
+   
+   Frames are movable by the user. TLDraw's snap mode aligns edges.
+   Content shapes live INSIDE frames (parentId = frameId).
+   ═══════════════════════════════════════════════════════════════════ */
+
+const A4 = {
+  WIDTH:   800,
+  HEIGHT:  1100,
+  GAP:     60,    // space between frames
+  COLS:    4,     // frames per row
+  PADDING: 40,    // inner padding within frame
+  ROW_H:   100,   // vertical step per content row inside a frame
+} as const
+
+/** Convert a grid slot index (0, 1, 2…) → top-left pixel position */
+function slotToXY(slot: number): { x: number; y: number } {
+  const col = slot % A4.COLS
+  const row = Math.floor(slot / A4.COLS)
+  return {
+    x: col * (A4.WIDTH + A4.GAP),
+    y: row * (A4.HEIGHT + A4.GAP),
+  }
+}
+
+/**
+ * Map an action's grid position to local pixel coords inside a frame.
+ * Action positions:  x = column (0–1),  y = row (−1 = title, 0+ = content)
+ */
+function actionToLocal(pos: { x: number; y: number }): { x: number; y: number } {
+  return {
+    x: A4.PADDING + Math.max(0, pos.x) * 360,
+    y: A4.PADDING + (pos.y + 1) * A4.ROW_H, // +1 so y=-1 → top of frame
+  }
+}
+
+/** Media goes to the right of the A4 grid */
+const MEDIA_AREA = {
+  X: A4.COLS * (A4.WIDTH + A4.GAP) + 120,
+  Y: 0,
+  STEP: 340,
+}
+
+const EMPTY_PLAYBACK: PlaybackState = {
+  isPlaying: false,
+  currentIndex: 0,
+  totalSubtitles: 0,
+  currentWordIndex: 0,
+  totalWords: 0,
+  currentWord: '',
+  visibleWords: [],
+  isFading: false,
+}
+
+/* ── Store interface ──────────────────────────────────────────────── */
 
 interface WhiteboardStore {
-  /** TLDraw snapshots keyed by chatId */
-  snapshots: Record<string, any>
-  /** Current editor instance */
-  editorRef: Editor | null
-
-  // Playback state for subtitles
+  // State
+  editor: Editor | null
+  currentChatId: string
   currentSubtitle: string
   playbackState: PlaybackState
+  activePlayer: ActionPlayer | null
 
-  setEditor: (editor: Editor | null) => void
+  // Persistence — keyed by chatId
+  snapshots: Record<string, any>
+  slotCounts: Record<string, number>   // how many A4 frames per chat
+  placedMedia: Record<string, boolean> // dedup keys for placed media
+  mediaCount: number                   // vertical counter for media stack
+
+  // Public actions
+  setEditor: (editor: Editor) => void
   saveSnapshot: (chatId: string) => void
   loadSnapshot: (chatId: string) => void
   clearWhiteboard: () => void
-  exportAsImage: () => Promise<Blob | null>
-  presentOnBoard: (scenePlan: ScenePlan) => void
-  placeScrapedMedia: (images: string[], videoIds: string[]) => void
-  placeYouTubeVideos: (videoIds: string[]) => void
-  placedMediaIds: string[]
   clearPlacedMedia: () => void
+  playScene: (scene: WhiteboardScene, speakFn: (text: string) => Promise<void>) => void
+  placeYouTubeVideos: (ids: string[]) => void
+  placeScrapedMedia: (images: string[], videos: string[]) => void
   focusOrPlaceMedia: (key: string) => void
-  playScene: (scene: WhiteboardScene, onSpeak: (text: string) => Promise<void>) => void
-  stopPlayback: () => void
+  exportAsImage: () => Promise<Blob | null>
 }
 
-let currentPlayer: ActionPlayer | null = null
+/* ── Zustand store ────────────────────────────────────────────────── */
 
 export const useWhiteboardStore = create<WhiteboardStore>((set, get) => ({
-  snapshots: {},
-  editorRef: null,
-  placedMediaIds: [],
+  editor: null,
+  currentChatId: '',
   currentSubtitle: '',
-  playbackState: {
-    isPlaying: false,
-    currentIndex: 0,
-    totalSubtitles: 0,
-    currentWordIndex: 0,
-    totalWords: 0,
-    currentWord: '',
-    visibleWords: [],
-    isFading: false,
+  playbackState: EMPTY_PLAYBACK,
+  activePlayer: null,
+  snapshots: {},
+  slotCounts: {},
+  placedMedia: {},
+  mediaCount: 0,
+
+  /* ── Editor lifecycle ────────────────────────────────────────── */
+
+  setEditor: (editor) => {
+    // Enable object-snap so A4 frames snap-align to each other's edges
+    try {
+      editor.user.updateUserPreferences({ isSnapMode: true })
+    } catch {
+      // Older TLDraw versions may not have this
+    }
+    set({ editor })
   },
 
-  setEditor: (editor) => set({ editorRef: editor }),
-
-  saveSnapshot: (chatId: string) => {
-    const { editorRef } = get()
-    if (!editorRef || !chatId) return
+  saveSnapshot: (chatId) => {
+    const { editor } = get()
+    if (!editor || !chatId) return
     try {
-      const snapshot = editorRef.store.getStoreSnapshot()
-      set((s) => ({
-        snapshots: { ...s.snapshots, [chatId]: snapshot },
-      }))
+      const snapshot = editor.store.getStoreSnapshot()
+      set((s) => ({ snapshots: { ...s.snapshots, [chatId]: snapshot } }))
     } catch (e) {
-      console.warn('Failed to save whiteboard snapshot:', e)
+      console.warn('[whiteboard] saveSnapshot failed:', e)
     }
   },
 
-  loadSnapshot: (chatId: string) => {
-    const { editorRef, snapshots } = get()
-    if (!editorRef || !chatId) return
+  loadSnapshot: (chatId) => {
+    const { editor, snapshots } = get()
+    if (!editor || !chatId) return
+
+    set({ currentChatId: chatId })
+
     const snap = snapshots[chatId]
     if (snap) {
       try {
-        editorRef.store.loadStoreSnapshot(snap)
+        editor.store.loadSnapshot(snap)
       } catch (e) {
-        console.warn('Failed to load whiteboard snapshot:', e)
+        console.warn('[whiteboard] loadSnapshot failed:', e)
       }
     }
+
+    // Derive slot count from existing frame shapes on the page
+    const frameCount = [...editor.getCurrentPageShapeIds()]
+      .map((id) => editor.getShape(id))
+      .filter((s) => s?.type === 'frame')
+      .length
+
+    set((s) => ({
+      slotCounts: { ...s.slotCounts, [chatId]: frameCount },
+    }))
   },
 
   clearWhiteboard: () => {
-    const { editorRef } = get()
-    if (!editorRef) return
-    try {
-      const shapeIds = [...editorRef.getCurrentPageShapeIds()]
-      editorRef.store.remove(shapeIds)
-    } catch (e) {
-      console.warn('Failed to clear whiteboard:', e)
+    const { editor, currentChatId } = get()
+    if (!editor) return
+    const ids = [...editor.getCurrentPageShapeIds()]
+    if (ids.length > 0) editor.deleteShapes(ids)
+    if (currentChatId) {
+      set((s) => ({
+        slotCounts: { ...s.slotCounts, [currentChatId]: 0 },
+        mediaCount: 0,
+      }))
     }
   },
 
+  clearPlacedMedia: () => set({ placedMedia: {}, mediaCount: 0 }),
+
+  /* ══════════════════════════════════════════════════════════════
+     A4 FRAME SCENE PLAYBACK
+     
+     Each playScene call:
+     1. Allocates the next A4 slot in the grid
+     2. Creates a TLDraw "frame" shape at that slot
+     3. ActionPlayer places content shapes INSIDE the frame
+     4. Content uses parentId so it moves with the frame
+     ══════════════════════════════════════════════════════════════ */
+
+  playScene: (scene, speakFn) => {
+    const { editor, currentChatId, slotCounts } = get()
+    if (!editor) return
+
+    // Stop any active playback
+    const prev = get().activePlayer
+    if (prev) prev.stop()
+
+    // ── 1. Allocate A4 slot & create frame ───────────────────
+    const slot = slotCounts[currentChatId] || 0
+    const pos = slotToXY(slot)
+    const frameId = createShapeId()
+
+    editor.createShape({
+      id: frameId,
+      type: 'frame',
+      x: pos.x,
+      y: pos.y,
+      props: {
+        w: A4.WIDTH,
+        h: A4.HEIGHT,
+        name: scene.title || `Scene ${slot + 1}`,
+      },
+    })
+
+    // Advance slot
+    set((s) => ({
+      slotCounts: { ...s.slotCounts, [currentChatId]: slot + 1 },
+    }))
+
+    // ── 2. Build ActionPlayer with frame-aware callbacks ─────
+    const player = new ActionPlayer(scene, {
+      onSubtitle: (text) => set({ currentSubtitle: text }),
+      onPlaybackState: (ps) => set({ playbackState: ps }),
+
+      onWhiteboardAction: (action) => {
+        const local = actionToLocal(action.position)
+        const isHeading = action.style === 'heading'
+        const isResult = action.style === 'result'
+        const fontSize: string = isHeading ? 'xl' : isResult ? 'l' : 'm'
+
+        const shapeId = createShapeId()
+
+        // Place shape as a child of the A4 frame.
+        // x/y are relative to the frame's top-left corner.
+        const shapeProps: Record<string, any> = {
+          text: action.text,
+          size: fontSize,
+        }
+
+        if (isHeading) {
+          // Headings auto-size (they're short)
+          shapeProps.autoSize = true
+        } else {
+          // Body/result text wraps within the frame width
+          shapeProps.autoSize = false
+          shapeProps.w = A4.WIDTH - 2 * A4.PADDING
+        }
+
+        editor.createShape({
+          id: shapeId,
+          type: 'text',
+          parentId: frameId,
+          x: local.x,
+          y: local.y,
+          props: shapeProps,
+        })
+      },
+
+      onSpeak: speakFn,
+
+      onComplete: () => {
+        set({ activePlayer: null })
+        // Pan camera to show the new frame nicely
+        try {
+          editor.zoomToFit({ duration: 400 })
+        } catch {
+          // Some TLDraw versions use different API
+          try { editor.zoomToFit() } catch {}
+        }
+      },
+    })
+
+    set({ activePlayer: player })
+    player.play()
+  },
+
+  /* ── Media placement (right of A4 grid) ──────────────────── */
+
+  placeYouTubeVideos: (ids) => {
+    const { editor, placedMedia } = get()
+    if (!editor) return
+    let count = get().mediaCount
+    const updates: Record<string, boolean> = {}
+
+    for (const id of ids) {
+      const key = `yt-${id}`
+      if (placedMedia[key]) continue
+
+      try {
+        editor.createShape({
+          id: createShapeId(),
+          type: 'youtube' as any,
+          x: MEDIA_AREA.X,
+          y: MEDIA_AREA.Y + count * MEDIA_AREA.STEP,
+          props: { videoId: id, w: 320, h: 200 },
+        })
+      } catch {
+        // YouTubeShapeUtil not registered — place as text link
+        editor.createShape({
+          id: createShapeId(),
+          type: 'text',
+          x: MEDIA_AREA.X,
+          y: MEDIA_AREA.Y + count * MEDIA_AREA.STEP,
+          props: { text: `▶ youtube.com/watch?v=${id}`, size: 's', autoSize: true },
+        })
+      }
+      updates[key] = true
+      count++
+    }
+
+    if (Object.keys(updates).length > 0) {
+      set((s) => ({
+        placedMedia: { ...s.placedMedia, ...updates },
+        mediaCount: count,
+      }))
+    }
+  },
+
+  placeScrapedMedia: (images, _videos) => {
+    const { editor, placedMedia } = get()
+    if (!editor) return
+    let count = get().mediaCount
+    const updates: Record<string, boolean> = {}
+
+    for (const url of images) {
+      const key = `img-${url}`
+      if (placedMedia[key]) continue
+
+      editor.createShape({
+        id: createShapeId(),
+        type: 'text',
+        x: MEDIA_AREA.X,
+        y: MEDIA_AREA.Y + count * MEDIA_AREA.STEP,
+        props: { text: `🖼 ${url}`, size: 's', autoSize: true },
+      })
+      updates[key] = true
+      count++
+    }
+
+    if (Object.keys(updates).length > 0) {
+      set((s) => ({
+        placedMedia: { ...s.placedMedia, ...updates },
+        mediaCount: count,
+      }))
+    }
+  },
+
+  focusOrPlaceMedia: (key) => {
+    const { editor } = get()
+    if (!editor) return
+
+    // Try to find an existing shape for this media
+    for (const id of editor.getCurrentPageShapeIds()) {
+      const shape = editor.getShape(id) as any
+      if (!shape) continue
+
+      if (key.startsWith('yt-') && shape.type === 'youtube' && shape.props?.videoId === key.slice(3)) {
+        editor.select(shape.id)
+        try { editor.zoomToSelection({ duration: 300 }) } catch {}
+        return
+      }
+      if (key.startsWith('img-') && shape.type === 'text' && shape.props?.text?.includes(key.slice(4))) {
+        editor.select(shape.id)
+        try { editor.zoomToSelection({ duration: 300 }) } catch {}
+        return
+      }
+    }
+
+    // Not found — place it
+    if (key.startsWith('yt-')) {
+      get().placeYouTubeVideos([key.slice(3)])
+    } else if (key.startsWith('img-')) {
+      get().placeScrapedMedia([key.slice(4)], [])
+    }
+  },
+
+  /* ── Export ──────────────────────────────────────────────────── */
+
   exportAsImage: async () => {
-    const { editorRef } = get()
-    if (!editorRef) return null
+    const { editor } = get()
+    if (!editor) return null
+
+    const shapeIds = [...editor.getCurrentPageShapeIds()]
+    if (shapeIds.length === 0) return null
 
     try {
-      const shapeIds = [...editorRef.getCurrentPageShapeIds()]
-      if (shapeIds.length === 0) return null
+      // TLDraw v2.x export
+      const svg = await editor.getSvg(shapeIds)
+      if (!svg) return null
 
-      const svgResult = await editorRef.getSvgString(shapeIds, {
-        background: true,
-        padding: 20,
-      })
-      if (!svgResult) return null
-
-      const { svg: svgString, width, height } = svgResult
+      const svgStr = new XMLSerializer().serializeToString(svg)
+      const canvas = document.createElement('canvas')
+      canvas.width = 1920
+      canvas.height = 1080
+      const ctx = canvas.getContext('2d')!
 
       return new Promise<Blob | null>((resolve) => {
         const img = new Image()
-        const svgBlob = new Blob([svgString], { type: 'image/svg+xml;charset=utf-8' })
-        const url = URL.createObjectURL(svgBlob)
-
         img.onload = () => {
-          const canvas = document.createElement('canvas')
-          const scale = 2
-          canvas.width = width * scale
-          canvas.height = height * scale
-          const ctx = canvas.getContext('2d')!
-          ctx.scale(scale, scale)
-          ctx.drawImage(img, 0, 0, width, height)
-          URL.revokeObjectURL(url)
-
-          canvas.toBlob((blob) => resolve(blob), 'image/png', 0.92)
+          ctx.fillStyle = '#ffffff'
+          ctx.fillRect(0, 0, 1920, 1080)
+          const scale = Math.min(1920 / img.width, 1080 / img.height, 1)
+          const dx = (1920 - img.width * scale) / 2
+          const dy = (1080 - img.height * scale) / 2
+          ctx.drawImage(img, dx, dy, img.width * scale, img.height * scale)
+          canvas.toBlob(resolve, 'image/png')
         }
-
-        img.onerror = () => {
-          URL.revokeObjectURL(url)
-          resolve(null)
-        }
-
-        img.src = url
+        img.onerror = () => resolve(null)
+        img.src = `data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(svgStr)))}`
       })
     } catch (e) {
-      console.error('Export failed:', e)
+      console.warn('[whiteboard] export failed:', e)
       return null
     }
-  },
-
-  presentOnBoard: (scenePlan: ScenePlan) => {
-    const { editorRef } = get()
-    if (!editorRef) return
-
-    const { snap = false, gridSize = 50 } = scenePlan
-    const viewportBounds = editorRef.getViewportScreenBounds()
-
-    const topLeft = editorRef.screenToPage({ x: viewportBounds.x, y: viewportBounds.y })
-    const bottomRight = editorRef.screenToPage({
-      x: viewportBounds.x + viewportBounds.w,
-      y: viewportBounds.y + viewportBounds.h,
-    })
-
-    const vpW = bottomRight.x - topLeft.x
-    const vpH = bottomRight.y - topLeft.y
-
-    const snapToGrid = (val: number) => {
-      if (!snap) return val
-      return Math.round(val / gridSize) * gridSize
-    }
-
-    for (const el of scenePlan.elements) {
-      const x = snapToGrid(topLeft.x + el.x * vpW)
-      const y = snapToGrid(topLeft.y + el.y * vpH)
-      const w = el.w * vpW
-      const h = el.h * vpH
-
-      if (el.type === 'text') {
-        editorRef.createShape({
-          type: 'text',
-          x,
-          y,
-          props: {
-            text: el.text || '',
-            size: el.fontSize && el.fontSize > 32 ? 'xl' : el.fontSize && el.fontSize > 20 ? 'l' : 'm',
-            w,
-          },
-        })
-      } else if (el.type === 'image' && el.url) {
-        const assetId = `asset:${el.id}` as any
-        editorRef.createAssets([
-          {
-            id: assetId,
-            type: 'image',
-            typeName: 'asset',
-            props: {
-              name: el.id,
-              src: el.url,
-              w,
-              h,
-              mimeType: 'image/png',
-              isAnimated: false,
-            },
-            meta: {},
-          },
-        ])
-        editorRef.createShape({
-          type: 'image',
-          x,
-          y,
-          props: {
-            assetId,
-            w,
-            h,
-          },
-        })
-      } else if (el.type === 'svg' && el.url) {
-        console.warn('SVG placement stubbed — treating as image')
-      }
-    }
-  },
-
-  placeScrapedMedia: (images: string[], videoIds: string[]) => {
-    const { editorRef, placedMediaIds } = get()
-    if (!editorRef) return
-    if (images.length === 0 && videoIds.length === 0) return
-
-    const newImages = images.filter(url => !placedMediaIds.includes(`img-${url}`))
-    if (newImages.length === 0) return
-
-    set(s => ({ placedMediaIds: [...s.placedMediaIds, ...newImages.map(url => `img-${url}`)] }))
-
-    const viewportBounds = editorRef.getViewportScreenBounds()
-    const topLeft = editorRef.screenToPage({ x: viewportBounds.x, y: viewportBounds.y })
-
-    const IMG_W = 240
-    const IMG_H = 180
-    const GAP = 16
-
-    newImages.slice(0, 6).forEach((src, i) => {
-      const urlKey = encodeURIComponent(src).slice(0, 50)
-      const shapeId = createShapeId('img-' + urlKey)
-      const assetId = `asset:img-${urlKey}` as any
-      editorRef.createAssets([{
-        id: assetId,
-        type: 'image',
-        typeName: 'asset',
-        props: {
-          name: `img-${i}`,
-          src,
-          w: IMG_W,
-          h: IMG_H,
-          mimeType: 'image/jpeg',
-          isAnimated: false,
-        },
-        meta: {},
-      }])
-      editorRef.createShape({
-        id: shapeId,
-        type: 'image',
-        x: topLeft.x + i * (IMG_W + GAP),
-        y: topLeft.y + 40,
-        props: { assetId, w: IMG_W, h: IMG_H },
-      })
-    })
-  },
-
-  placeYouTubeVideos: (videoIds: string[]) => {
-    const { editorRef, placedMediaIds } = get()
-    if (!editorRef) return
-
-    const newIds = videoIds.filter(id => !placedMediaIds.includes(`yt-${id}`))
-    if (newIds.length === 0) return
-
-    set(s => ({ placedMediaIds: [...s.placedMediaIds, ...newIds.map(id => `yt-${id}`)] }))
-
-    const viewportBounds = editorRef.getViewportScreenBounds()
-    const topLeft = editorRef.screenToPage({ x: viewportBounds.x, y: viewportBounds.y })
-
-    const W = 480
-    const H = 306
-    const GAP = 20
-
-    newIds.forEach((videoId, i) => {
-      const shapeId = createShapeId('yt-' + videoId)
-      editorRef.createShape({
-        id: shapeId,
-        type: 'youtube',
-        x: topLeft.x + i * (W + GAP),
-        y: topLeft.y + 40,
-        props: { videoId, w: W, h: H },
-      })
-    })
-  },
-
-  clearPlacedMedia: () => set({ placedMediaIds: [] }),
-
-  focusOrPlaceMedia: (key: string) => {
-    const { editorRef } = get()
-    if (!editorRef) return
-
-    if (key.startsWith('yt-')) {
-      const videoId = key.slice(3)
-      const shapeId = createShapeId('yt-' + videoId)
-      const shape = editorRef.getShape(shapeId)
-      if (shape) {
-        editorRef.setSelectedShapes([shapeId])
-        editorRef.zoomToSelection()
-      } else {
-        set(s => ({ placedMediaIds: s.placedMediaIds.filter(id => id !== `yt-${videoId}`) }))
-        get().placeYouTubeVideos([videoId])
-      }
-    } else if (key.startsWith('img-')) {
-      const url = key.slice(4)
-      const urlKey = encodeURIComponent(url).slice(0, 50)
-      const shapeId = createShapeId('img-' + urlKey)
-      const shape = editorRef.getShape(shapeId)
-      if (shape) {
-        editorRef.setSelectedShapes([shapeId])
-        editorRef.zoomToSelection()
-      } else {
-        set(s => ({ placedMediaIds: s.placedMediaIds.filter(id => id !== `img-${url}`) }))
-        get().placeScrapedMedia([url], [])
-      }
-    }
-  },
-
-  playScene: (scene: WhiteboardScene, onSpeak: (text: string) => Promise<void>) => {
-    const { editorRef } = get()
-    if (!editorRef) {
-      console.warn('Cannot play scene: no editor reference')
-      return
-    }
-
-    // Stop any existing playback
-    if (currentPlayer) {
-      currentPlayer.stop()
-      currentPlayer = null
-    }
-
-    // ── Capture viewport origin ONCE at scene start ──────────────────
-    // All shapes in this scene use these fixed coords regardless of later
-    // panning/zooming, so the layout stays consistent.
-    const vb = editorRef.getViewportScreenBounds()
-    const sceneTL = editorRef.screenToPage({ x: vb.x, y: vb.y })
-    const sceneBR = editorRef.screenToPage({ x: vb.x + vb.w, y: vb.y + vb.h })
-    const sceneVpW = sceneBR.x - sceneTL.x
-    const sceneVpH = sceneBR.y - sceneTL.y
-    const sceneColW = sceneVpW / 3
-    const sceneRowH = Math.min(sceneVpH / 8, 120)
-
-    // Create ActionPlayer with callbacks
-    const player = new ActionPlayer(scene, {
-      onSubtitle: (text: string) => {
-        set({ currentSubtitle: text })
-      },
-      onPlaybackState: (state: PlaybackState) => {
-        set({ playbackState: state })
-      },
-      onWhiteboardAction: (action: WhiteboardAction) => {
-        const { editorRef: ed } = get()
-        if (!ed) return
-
-        const cleanText = cleanForWhiteboard(action.text)
-        // Use scene-start viewport — stays fixed even if user pans/zooms
-        const px = sceneTL.x + action.position.x * sceneColW
-        const py = sceneTL.y + 50 + action.position.y * sceneRowH
-
-        if (action.type === 'create_text') {
-          const shapeId = createShapeId(action.id)
-          ed.createShape({
-            id: shapeId,
-            type: 'text',
-            x: px,
-            y: py,
-            props: {
-              text: cleanText,
-              size: action.style === 'heading' ? 'xl' : action.style === 'body' ? 'm' : 'l',
-            },
-          })
-        } else if (action.type === 'create_box') {
-          const shapeId = createShapeId(action.id)
-          ed.createShape({
-            id: shapeId,
-            type: 'geo',
-            x: px,
-            y: py,
-            props: {
-              geo: 'rectangle',
-              w: sceneColW * 0.9,
-              h: sceneRowH * 0.85,
-            },
-          })
-        } else if (action.type === 'highlight') {
-          console.log('Highlight action:', action.id)
-        }
-      },
-      onSpeak: (text: string) => {
-        // Clean text before sending to TTS
-        const cleanText = cleanForTTS(text)
-        return onSpeak(cleanText)
-      },
-      onComplete: () => {
-        set({
-          playbackState: {
-            isPlaying: false,
-            currentIndex: 0,
-            totalSubtitles: 0,
-            currentWordIndex: 0,
-            totalWords: 0,
-            currentWord: '',
-            visibleWords: [],
-            isFading: false,
-          },
-          currentSubtitle: ''
-        })
-        currentPlayer = null
-      },
-    })
-
-    currentPlayer = player
-    player.play()
-
-    // After ActionPlayer's initial 400ms render pause, zoom to fit all placed shapes
-    setTimeout(() => {
-      const { editorRef: ed } = get()
-      if (!ed) return
-      try {
-        const shapeIds = [...ed.getCurrentPageShapeIds()]
-        if (shapeIds.length > 0) ed.zoomToFit({ animation: { duration: 400 } })
-      } catch (e) {
-        // zoomToFit not critical — ignore errors
-      }
-    }, 600)
-  },
-
-  stopPlayback: () => {
-    if (currentPlayer) {
-      currentPlayer.stop()
-      currentPlayer = null
-    }
-    set({
-      playbackState: {
-        isPlaying: false,
-        currentIndex: 0,
-        totalSubtitles: 0,
-        currentWordIndex: 0,
-        totalWords: 0,
-        currentWord: '',
-        visibleWords: [],
-        isFading: false,
-      },
-      currentSubtitle: ''
-    })
   },
 }))

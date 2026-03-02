@@ -418,6 +418,7 @@ export default function Home() {
   const editInputRef = useRef<HTMLInputElement>(null)
   const lastSpokenId = useRef<string | null>(null)
   const callbackRef  = useRef<(text: string) => void>(() => {})
+  const wasSpeakingRef = useRef(false)
 
   // FIX 3: auto-collapse panels when switching to board, don't auto-restore on chat
   useEffect(() => {
@@ -459,6 +460,32 @@ export default function Home() {
   useEffect(() => {
     if (voice.interimText) setInput(voice.interimText)
   }, [voice.interimText])
+
+
+  // ── Auto-listen after AI finishes answering with a question ──
+  useEffect(() => {
+    const wasSpeaking = wasSpeakingRef.current
+    wasSpeakingRef.current = voice.isSpeaking
+
+    // Only trigger on the transition: speaking → not speaking
+    if (!wasSpeaking || voice.isSpeaking) return
+    // Guards: must have voice enabled, not already listening, not processing
+    if (!voiceEnabled || voice.isListening || isProcessing) return
+
+    // Check if the last assistant message ends with a question mark
+    const last = currentMessages[currentMessages.length - 1]
+    if (last?.role === 'assistant' && /\?\s*$/.test(last.content.trim())) {
+      // Brief pause before listening so the user hears the question end
+      const timer = setTimeout(() => {
+        // Re-check conditions (they might have changed during the timeout)
+        if (!voice.isListening && !voice.isSpeaking) {
+          voice.startListening()
+        }
+      }, 800)
+      return () => clearTimeout(timer)
+    }
+  }, [voice.isSpeaking, voiceEnabled, voice.isListening, isProcessing, currentMessages])
+
 
   // ── Auto-place YouTube videos on the whiteboard ────────────────
   useEffect(() => {

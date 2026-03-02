@@ -6,6 +6,42 @@
 
 ## Important Facts
 
+- User knows plants need air and water
+
+
+- User believes photosynthesis involves plants making food
+
+
+- User wants to learn about photosynthesis
+
+
+- User is moving on to 'Understanding the Photosynthesis Process'
+
+
+- User has completed the 'Discovering Photosynthesis' milestone
+
+
+- User is learning about photosynthesis
+
+
+- User thinks photosynthesis is about plants making food.
+
+
+- User wants to learn about photosynthesis
+
+
+- User wants to learn about photosynthesis
+
+
+- User is ready to start Milestone 1: Discovering Clouds
+
+
+- User wants to learn about different types of clouds
+
+
+- User wants to learn about different types of clouds
+
+
 - User is ready to begin learning
 
 
