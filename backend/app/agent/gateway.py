@@ -153,30 +153,6 @@ class Gateway:
 
         # Fetch milestones for this chat to include on whiteboard
         milestone_section = ""
-        if chat_id:
-            try:
-                store = get_milestone_store()
-                plans = store.list_plans_for_chat(chat_id)
-                if plans:
-                    plan = plans[0]
-                    milestone_lines = []
-                    for m in plan.milestones:
-                        status_label = {
-                            "mastered": "Done",
-                            "in_progress": "Current",
-                            "available": "Next",
-                            "locked": "Locked",
-                        }.get(m.status.value, "")
-                        milestone_lines.append(f"{m.order}. {m.title} [{status_label}]")
-                    milestone_section = (
-                        f"\n\nActive learning plan for '{plan.topic}':\n"
-                        + "\n".join(milestone_lines)
-                        + "\n\nInclude the milestone list as the FIRST whiteboard actions "
-                        "(one create_text per milestone, positioned at x=0, y=0 through y=N). "
-                        "Use style 'heading' for the topic title and 'body' for each milestone."
-                    )
-            except Exception as e:
-                logger.warning(f"Failed to fetch milestones for whiteboard: {e}")
 
         prompt = (
             "You are a whiteboard layout engine. Given a tutoring explanation, "
