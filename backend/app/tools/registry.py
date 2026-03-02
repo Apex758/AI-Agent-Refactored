@@ -406,7 +406,8 @@ class ToolRegistry:
 
         store = get_milestone_store()
         if store.get_plan_for_topic(chat_id, topic):
-            return {"status": "already_exists", "topic": topic}
+            return {"status": "already_exists", "topic": topic,
+                    "instruction": "Plan already saved. DO NOT call this tool again. Proceed to teaching."}
 
         ms = [
             Milestone(

@@ -275,6 +275,8 @@ class Gateway:
         max_iterations = max_iterations or settings.max_tool_calls
         iteration = 0
         media: Dict = {"images": [], "videos": []}
+        tool_call_counts: Dict[str, int] = {}
+        MAX_SAME_TOOL = 1  # prevent duplicate tool calls
 
         while iteration < max_iterations:
             result = await self.llm.generate(
@@ -291,6 +293,12 @@ class Gateway:
                 assistant_content = result.get("content", "")
 
                 for tc in tool_calls:
+                    # Deduplication check
+                    tool_call_counts[tc['name']] = tool_call_counts.get(tc['name'], 0) + 1
+                    if tool_call_counts[tc['name']] > MAX_SAME_TOOL:
+                        logger.warning(f"Skipping duplicate tool call: {tc['name']}")
+                        continue
+                    
                     logger.info(f"Tool call: {tc['name']}({tc.get('arguments', '')})")
                     args = tc.get("arguments", {})
                     if isinstance(args, str):
@@ -349,6 +357,8 @@ class Gateway:
     ) -> str:
         max_iterations = max_iterations or settings.max_tool_calls
         iteration = 0
+        tool_call_counts: Dict[str, int] = {}
+        MAX_SAME_TOOL = 1  # prevent duplicate tool calls
 
         while iteration < max_iterations:
             result = await self.llm.generate(
@@ -365,6 +375,12 @@ class Gateway:
                 assistant_content = result.get("content", "")
 
                 for tc in tool_calls:
+                    # Deduplication check
+                    tool_call_counts[tc['name']] = tool_call_counts.get(tc['name'], 0) + 1
+                    if tool_call_counts[tc['name']] > MAX_SAME_TOOL:
+                        logger.warning(f"Skipping duplicate tool call: {tc['name']}")
+                        continue
+                    
                     logger.info(f"Tool call: {tc['name']}({tc.get('arguments', '')})")
                     args = tc.get("arguments", {})
                     if isinstance(args, str):

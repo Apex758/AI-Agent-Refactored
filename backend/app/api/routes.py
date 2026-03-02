@@ -142,12 +142,15 @@ async def websocket_chat(ws: WebSocket, client_id: str):
                     re.IGNORECASE,
                 )
                 if full_response and LEARNING_RE.search(user_message):
-                    scene = await gateway.process_teaching(full_response, user_message)
-                    if scene:
-                        await ws_manager.send(client_id, {
-                            "type": "whiteboard_scene",
-                            "scene": scene,
-                        })
+                    # Fire-and-forget: process_teaching adds ~2s LLM round-trip, don't block TTS
+                    async def send_scene():
+                        scene = await gateway.process_teaching(full_response, user_message, client_id)
+                        if scene:
+                            await ws_manager.send(client_id, {
+                                "type": "whiteboard_scene",
+                                "scene": scene,
+                            })
+                    asyncio.create_task(send_scene())
                         
             except Exception as e:
                 logger.error(f"Stream error: {e}")
