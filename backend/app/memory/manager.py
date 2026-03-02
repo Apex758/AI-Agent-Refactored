@@ -12,12 +12,17 @@ Architecture:
 import json
 import hashlib
 import sqlite3
+import locale
 from datetime import datetime, date
 from typing import List, Dict, Optional, Tuple
 from pathlib import Path
 
 from app.core.config import settings
 from app.core.logging import logger
+
+# Log encoding info at module load time
+logger.info(f"System default encoding: {locale.getpreferredencoding()}")
+logger.info(f"File system encoding: {__import__('sys').getfilesystemencoding()}")
 
 
 def _get_chroma_ef():
@@ -129,14 +134,20 @@ class MemoryManager:
     def _ensure_memory_file(self):
         if not self.memory_file.exists():
             self.memory_file.write_text(
-                "# Agent Memory\n\n## User Profile\n\n## Key Decisions\n\n## Important Facts\n\n"
+                "# Agent Memory\n\n## User Profile\n\n## Key Decisions\n\n## Important Facts\n\n",
+                encoding="utf-8"
             )
 
     def get_memory_file(self) -> str:
-        return self.memory_file.read_text() if self.memory_file.exists() else ""
+        try:
+            return self.memory_file.read_text(encoding="utf-8") if self.memory_file.exists() else ""
+        except UnicodeDecodeError as e:
+            logger.error(f"Failed to decode memory file with UTF-8: {e}")
+            # Fallback: try with errors='replace'
+            return self.memory_file.read_text(encoding="utf-8", errors="replace") if self.memory_file.exists() else ""
 
     def update_memory_file(self, content: str):
-        self.memory_file.write_text(content)
+        self.memory_file.write_text(content, encoding="utf-8")
         self._index_file(str(self.memory_file))
 
     def append_to_memory(self, section: str, content: str):
@@ -153,10 +164,14 @@ class MemoryManager:
 
     def get_chat_memory(self, chat_id: str) -> str:
         path = self.chats_dir / f"{chat_id}.md"
-        return path.read_text() if path.exists() else ""
+        try:
+            return path.read_text(encoding="utf-8") if path.exists() else ""
+        except UnicodeDecodeError as e:
+            logger.error(f"Failed to decode chat memory {chat_id}: {e}")
+            return path.read_text(encoding="utf-8", errors="replace") if path.exists() else ""
 
     def _write_chat_memory(self, chat_id: str, content: str):
-        (self.chats_dir / f"{chat_id}.md").write_text(content)
+        (self.chats_dir / f"{chat_id}.md").write_text(content, encoding="utf-8")
 
     async def update_chat_memory(self, chat_id: str, user_msg: str, assistant_msg: str):
         from app.core.llm import get_llm
@@ -250,7 +265,11 @@ class MemoryManager:
         query_lower = query.lower()
         results = []
         for mem_file in self.chats_dir.glob("*.md"):
-            content = mem_file.read_text()
+            try:
+                content = mem_file.read_text(encoding="utf-8")
+            except UnicodeDecodeError as e:
+                logger.error(f"Failed to decode chat file {mem_file}: {e}")
+                content = mem_file.read_text(encoding="utf-8", errors="replace")
             score = sum(1 for w in query_lower.split() if w in content.lower())
             if score == 0:
                 continue
@@ -405,13 +424,17 @@ class MemoryManager:
     def get_daily_log(self, log_date: Optional[date] = None) -> str:
         d = log_date or date.today()
         path = self.memory_dir / f"{d.isoformat()}.md"
-        return path.read_text() if path.exists() else ""
+        try:
+            return path.read_text(encoding="utf-8") if path.exists() else ""
+        except UnicodeDecodeError as e:
+            logger.error(f"Failed to decode daily log {d}: {e}")
+            return path.read_text(encoding="utf-8", errors="replace") if path.exists() else ""
 
     def append_daily_log(self, entry: str, log_date: Optional[date] = None):
         d = log_date or date.today()
         path = self.memory_dir / f"{d.isoformat()}.md"
         if not path.exists():
-            path.write_text(f"# Daily Log — {d.isoformat()}\n\n")
+            path.write_text(f"# Daily Log — {d.isoformat()}\n\n", encoding="utf-8")
         timestamp = datetime.now().strftime("%H:%M")
         with open(path, "a", encoding="utf-8") as f:
             f.write(f"\n### {timestamp}\n\n{entry}\n")
@@ -615,7 +638,11 @@ class MemoryManager:
         if file_path == "MEMORY.md":
             return self.get_memory_file()
         full_path = self.memory_dir / file_path
-        return full_path.read_text() if full_path.exists() else f"File not found: {file_path}"
+        try:
+            return full_path.read_text(encoding="utf-8") if full_path.exists() else f"File not found: {file_path}"
+        except UnicodeDecodeError as e:
+            logger.error(f"Failed to decode file {file_path}: {e}")
+            return full_path.read_text(encoding="utf-8", errors="replace") if full_path.exists() else f"File not found: {file_path}"
 
 
 # Singleton

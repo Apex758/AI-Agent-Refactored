@@ -44,8 +44,13 @@ class Gateway:
         personality_path = settings.agent_personality
         for candidate in [personality_path, f"../{personality_path}", f"data/{personality_path}"]:
             if os.path.exists(candidate):
-                with open(candidate) as f:
-                    self._personality = f.read()
+                try:
+                    with open(candidate, encoding="utf-8") as f:
+                        self._personality = f.read()
+                except UnicodeDecodeError as e:
+                    logger.warning(f"Failed to read personality file {candidate} as UTF-8: {e}")
+                    with open(candidate, encoding="utf-8", errors="replace") as f:
+                        self._personality = f.read()
                 return self._personality
         self._personality = (
             f"You are {settings.agent_name}, a personal AI agent. "
