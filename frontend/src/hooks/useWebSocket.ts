@@ -85,56 +85,35 @@ export function useWebSocket(clientId: string) {
   }, [clientId])
 
 
-  // Browser SpeechSynthesis fallback — used when server TTS fails or is unavailable
-  const speakBrowser = useCallback((text: string): Promise<void> => {
-    return new Promise((resolve) => {
-      if (typeof window === 'undefined' || !window.speechSynthesis) {
-        resolve()
-        return
-      }
-      window.speechSynthesis.cancel()
-      const utt = new SpeechSynthesisUtterance(text)
-      utt.rate = 1.05
-      utt.onend = () => resolve()
-      utt.onerror = () => resolve()
-      window.speechSynthesis.speak(utt)
-    })
-  }, [])
-
-  // Helper to send TTS request and wait for audio playback to complete
+  // Helper to send TTS request and wait for audio playback to complete (Piper only)
   const speakAndWait = useCallback((text: string): Promise<void> => {
     return new Promise((resolve) => {
       const ws = wsRef.current
       const clean = cleanForTTS(text)
       if (!clean) { resolve(); return }
 
-      // No open WebSocket — go straight to browser TTS
+      // No open WebSocket — skip silently (Piper only, no browser fallback)
       if (!ws || ws.readyState !== WebSocket.OPEN) {
-        speakBrowser(clean).then(resolve)
+        resolve()
         return
       }
 
       let resolved = false
-      const done = (fallback = false) => {
+      const done = () => {
         if (resolved) return
         resolved = true
         clearTimeout(timer)
         ws.removeEventListener('message', onMessage)
-        if (fallback) {
-          speakBrowser(clean).then(resolve)
-        } else {
-          resolve()
-        }
+        resolve()
       }
 
-      // 15-second fallback so ActionPlayer never hangs on a dead TTS promise
-      const timer = setTimeout(() => done(true), 15000)
+      // 15-second safety timeout so ActionPlayer never hangs
+      const timer = setTimeout(() => done(), 15000)
 
       const onMessage = (event: MessageEvent) => {
         try {
           const msg = JSON.parse(event.data)
           if (msg.type === 'tts_audio') {
-            // Stop listening before playing so we don't catch the next subtitle's audio
             clearTimeout(timer)
             ws.removeEventListener('message', onMessage)
             resolved = true
@@ -149,8 +128,8 @@ export function useWebSocket(clientId: string) {
             audio.onerror = onDone
             audio.play().catch(() => onDone())
           } else if (msg.type === 'tts_error') {
-            // Server TTS failed — fall back to browser speech so user still hears audio
-            done(true)
+            // Piper failed — resolve silently, no browser TTS fallback
+            done()
           }
         } catch (e) {
           // Not our message, ignore
@@ -160,7 +139,7 @@ export function useWebSocket(clientId: string) {
       ws.addEventListener('message', onMessage)
       ws.send(JSON.stringify({ type: 'tts', text: clean }))
     })
-  }, [speakBrowser])
+  }, [])
 
   const handleWhiteboardScene = useCallback((scene: any) => {
     if (!scene) return

@@ -20,7 +20,6 @@ export function useVoice(onFinalTranscript: (text: string) => void): UseVoiceRet
   const [interimText, setInterimText]   = useState('')
 
   const recRef      = useRef<any>(null)
-  const synthRef    = useRef<SpeechSynthesis | null>(null)
   const callbackRef = useRef(onFinalTranscript)
   const wsRef       = useRef<WebSocket | null>(null)
   const audioRef    = useRef<HTMLAudioElement | null>(null)
@@ -30,8 +29,7 @@ export function useVoice(onFinalTranscript: (text: string) => void): UseVoiceRet
   useEffect(() => {
     if (typeof window === 'undefined') return
     const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
-    setSupported(!!SR && !!window.speechSynthesis)
-    synthRef.current = window.speechSynthesis ?? null
+    setSupported(!!SR)
   }, [])
 
   // Initialize WebSocket connection for server-side TTS
@@ -100,7 +98,6 @@ export function useVoice(onFinalTranscript: (text: string) => void): UseVoiceRet
       audioRef.current.pause()
       audioRef.current = null
     }
-    synthRef.current?.cancel()
     setIsSpeaking(false)
   }, [])
 
@@ -109,35 +106,15 @@ export function useVoice(onFinalTranscript: (text: string) => void): UseVoiceRet
     const clean = cleanForTTS(text)
     if (!clean) return
 
-    // Try server-side TTS first
+    // Send to Piper TTS via the /webrtc WebSocket
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({
         type: 'tts',
         text: clean,
         speed: 1.0
       }))
-    } else {
-      // Fallback to browser TTS
-      const synth = synthRef.current
-      if (!synth) return
-      synth.cancel()
-
-      const utt = new SpeechSynthesisUtterance(clean)
-      utt.rate = 1.05
-      utt.pitch = 1.0
-
-      const voices = synth.getVoices()
-      const preferred = voices.find(v =>
-        /Google|Samantha|Alex|Daniel|Karen|Moira|Fiona/i.test(v.name)
-      )
-      if (preferred) utt.voice = preferred
-
-      utt.onstart = () => setIsSpeaking(true)
-      utt.onend   = () => setIsSpeaking(false)
-      utt.onerror = () => setIsSpeaking(false)
-
-      synth.speak(utt)
     }
+    // No browser TTS fallback — Piper only
   }, [])
 
   // ── STT ──────────────────────────────────────────────────────────
