@@ -94,13 +94,11 @@ async def websocket_chat(ws: WebSocket, client_id: str):
                 full_response = ""
                 async for event in gateway.process_stream(user_message, client_id=client_id, channel="web"):
                     if event["type"] == "citations":
-                        # Send citations before tokens so frontend can display them
                         await ws_manager.send(client_id, {
                             "type": "citations",
                             "citations": event["citations"],
                         })
                     elif event["type"] == "media":
-                        # Send scraped images/videos so frontend can show MediaCard + board
                         await ws_manager.send(client_id, {
                             "type": "media",
                             "images": event.get("images", []),
@@ -112,6 +110,22 @@ async def websocket_chat(ws: WebSocket, client_id: str):
 
                 await ws_manager.send(client_id, {"type": "complete", "content": full_response})
 
+                # ── Whiteboard scene (teaching mode) ──
+                # After chat response completes, check if this was a learning query
+                # and generate a structured whiteboard scene.
+                import re
+                LEARNING_RE = re.compile(
+                    r'\b(learn|teach me|explain|study|understand|how does|what is|walk me through)\b',
+                    re.IGNORECASE,
+                )
+                if full_response and LEARNING_RE.search(user_message):
+                    scene = await gateway.process_teaching(full_response, user_message)
+                    if scene:
+                        await ws_manager.send(client_id, {
+                            "type": "whiteboard_scene",
+                            "scene": scene,
+                        })
+                        
             except Exception as e:
                 logger.error(f"Stream error: {e}")
                 result = await gateway.process(user_message, client_id=client_id, channel="web")

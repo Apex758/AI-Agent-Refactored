@@ -1,6 +1,8 @@
 'use client'
 import { useEffect, useRef, useCallback } from 'react'
 import { useChatStore } from '@/store/chatStore'
+import { useWhiteboardStore } from '@/store/whiteboardStore'
+import { useUIStore } from '@/store/uiStore'
 
 const WS_BASE = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000'
 
@@ -42,6 +44,9 @@ export function useWebSocket(clientId: string) {
             console.log('[DEBUG WS] Received media event:', { images: msg.images, videos: msg.videos })
             addScrapedMedia(msg.images ?? [], msg.videos ?? [])
             break
+          case 'whiteboard_scene':
+            handleWhiteboardScene(msg.scene)
+            break
         }
       } catch (err) {
         console.error('WS parse error:', err)
@@ -69,6 +74,17 @@ export function useWebSocket(clientId: string) {
     }
   }, [clientId])
 
+
+  const handleWhiteboardScene = useCallback((scene: any) => {
+    if (!scene) return
+    // Switch to whiteboard mode
+    useUIStore.getState().setMode('whiteboard')
+    // Small delay to let TLDraw mount, then play the scene
+    setTimeout(() => {
+      useWhiteboardStore.getState().playScene(scene)
+    }, 500)
+  }, [])
+  
   const send = useCallback((message: string) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({ message }))

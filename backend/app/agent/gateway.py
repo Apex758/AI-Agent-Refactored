@@ -29,7 +29,7 @@ from app.milestones.milestone_store import (
     Milestone,
     MilestoneStatus,
 )
-
+from app.api.whiteboard_types import WhiteboardScene
 
 class Gateway:
     def __init__(self):
@@ -137,6 +137,78 @@ class Gateway:
         self.memory.save_message(client_id, "assistant", full_response)
         asyncio.create_task(self.memory.auto_capture(message, full_response, client_id))
 
+
+    async def process_teaching(self, full_response: str, user_message: str) -> Optional[Dict]:
+            """
+            Post-process an LLM response into a structured whiteboard scene.
+            Returns a dict matching WhiteboardScene schema, or None if parsing fails.
+            """
+            prompt = (
+                "You are a whiteboard layout engine. Given a tutoring explanation, "
+                "convert it into a structured JSON whiteboard scene.\n\n"
+                "Rules:\n"
+                "- Split the explanation into 3-8 short spoken phrases (subtitles)\n"
+                "- Each subtitle should be ONE sentence, spoken naturally\n"
+                "- For each subtitle that introduces a math step or key fact, "
+                "create a matching whiteboard action\n"
+                "- Whiteboard shows ONLY math/work (short). Subtitles handle explanations.\n"
+                "- Position: x=column (usually 0), y=row (0,1,2...)\n"
+                "- Style: 'heading' for step labels, 'body' for work, 'result' for final answer\n"
+                "- The marker field in a subtitle must match an action id exactly\n"
+                "- Not every subtitle needs a marker — explanatory phrases can have marker: null\n\n"
+                "Return ONLY valid JSON (no markdown fences, no preamble):\n"
+                "{\n"
+                '  "title": "short topic title",\n'
+                '  "clean_response": "full explanation as readable text",\n'
+                '  "subtitles": [\n'
+                '    {"id": "sub-1", "text": "spoken phrase", "marker": "step-1"},\n'
+                '    {"id": "sub-2", "text": "explanation only", "marker": null}\n'
+                "  ],\n"
+                '  "whiteboard": {\n'
+                '    "actions": [\n'
+                '      {"id": "step-1", "type": "create_text", "text": "board text", '
+                '"position": {"x": 0, "y": 0}, "style": "heading"}\n'
+                "    ]\n"
+                "  }\n"
+                "}\n\n"
+                f"User question: {user_message[:300]}\n\n"
+                f"Tutor explanation:\n{full_response[:3000]}"
+            )
+
+            try:
+                result = await self.llm.generate(
+                    messages=[{"role": "user", "content": prompt}],
+                    system_prompt=(
+                        "You convert tutoring explanations into structured whiteboard JSON. "
+                        "Return ONLY valid JSON."
+                    ),
+                )
+                content = result.get("content", "")
+
+                # Strip markdown fences
+                if "```" in content:
+                    content = content.split("```")[1]
+                    if content.startswith("json"):
+                        content = content[4:]
+                    content = content.strip()
+
+                if "{" in content:
+                    json_str = content[content.index("{"):content.rindex("}") + 1]
+                    scene = json.loads(json_str)
+
+                    if "subtitles" in scene and "whiteboard" in scene:
+                        if not scene.get("title"):
+                            scene["title"] = user_message[:60]
+                        if not scene.get("clean_response"):
+                            scene["clean_response"] = full_response
+                        return scene
+
+            except Exception as e:
+                logger.warning(f"Teaching scene generation failed: {e}")
+
+            return None
+        
+        
     async def _agent_loop_with_media(
         self,
         messages: List[Dict],

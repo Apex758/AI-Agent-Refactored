@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import type { Editor } from 'tldraw'
 import { createShapeId } from 'tldraw'
 import type { ScenePlan } from '@/components/whiteboard/types'
+import type { WhiteboardScene, WhiteboardAction, PlaybackState } from '@/types/whiteboard-sync'
 
 interface WhiteboardStore {
   /** TLDraw snapshots keyed by chatId */
@@ -20,6 +21,8 @@ interface WhiteboardStore {
   placedMediaIds: string[]  // Track already-placed media to avoid duplicates
   clearPlacedMedia: () => void
   focusOrPlaceMedia: (key: string) => void
+
+  
 }
 
 export const useWhiteboardStore = create<WhiteboardStore>((set, get) => ({
