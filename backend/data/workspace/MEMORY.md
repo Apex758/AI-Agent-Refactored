@@ -6,6 +6,15 @@
 
 ## Important Facts
 
+- User is ready to begin learning
+
+
+- User wants to learn about simple multiplication
+
+
+- User wants to learn about simple multiplication
+
+
 - User wants to learn about the water cycle
 
 

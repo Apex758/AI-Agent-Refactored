@@ -23,6 +23,11 @@ function extractSentences(buf: string): { sentences: string[]; remainder: string
   return { sentences, remainder: buf.slice(lastEnd) }
 }
 
+/** Generate a short unique ID for TTS request correlation */
+function genRequestId(): string {
+  return Math.random().toString(36).slice(2, 10) + '-' + Date.now().toString(36)
+}
+
 export function useWebSocket(clientId: string, onSentence?: (text: string) => void) {
   const wsRef = useRef<WebSocket | null>(null)
   const clientIdRef = useRef(clientId)
@@ -88,14 +93,9 @@ export function useWebSocket(clientId: string, onSentence?: (text: string) => vo
             addScrapedMedia(msg.images ?? [], msg.videos ?? [])
             break
           case 'whiteboard_scene':
-            // Pre-synthesize all subtitles immediately
-            if (msg.scene?.subtitles) {
-                msg.scene.subtitles.forEach((sub: any) => {
-                    if (ws.readyState === WebSocket.OPEN) {
-                        ws.send(JSON.stringify({ type: 'tts', text: cleanForTTS(sub.text) }))
-                    }
-                })
-            }
+            // FIX: Do NOT pre-synthesize here. ActionPlayer will call
+            // speakAndWait sequentially for each subtitle with a unique
+            // request_id so the correct audio plays for each subtitle.
             handleWhiteboardScene(msg.scene)
             break
         }
@@ -136,7 +136,9 @@ export function useWebSocket(clientId: string, onSentence?: (text: string) => vo
   }, [clientId])
 
 
-  // Helper to send TTS request and wait for audio playback to complete (Piper only)
+  // Helper to send TTS request and wait for audio playback to complete (Piper only).
+  // FIX: Uses a unique request_id so we only resolve when the MATCHING audio arrives,
+  // not some other subtitle's audio that happened to arrive first.
   const speakAndWait = useCallback((text: string): Promise<void> => {
     return new Promise((resolve) => {
       const ws = wsRef.current
@@ -149,6 +151,7 @@ export function useWebSocket(clientId: string, onSentence?: (text: string) => vo
         return
       }
 
+      const requestId = genRequestId()
       let resolved = false
       const done = () => {
         if (resolved) return
@@ -164,7 +167,9 @@ export function useWebSocket(clientId: string, onSentence?: (text: string) => vo
       const onMessage = (event: MessageEvent) => {
         try {
           const msg = JSON.parse(event.data)
-          if (msg.type === 'tts_audio') {
+
+          // FIX: Only handle tts_audio with OUR request_id
+          if (msg.type === 'tts_audio' && msg.request_id === requestId) {
             clearTimeout(timer)
             ws.removeEventListener('message', onMessage)
             resolved = true
@@ -178,8 +183,8 @@ export function useWebSocket(clientId: string, onSentence?: (text: string) => vo
             audio.onended = onDone
             audio.onerror = onDone
             audio.play().catch(() => onDone())
-          } else if (msg.type === 'tts_error') {
-            // Piper failed — resolve silently, no browser TTS fallback
+          } else if (msg.type === 'tts_error' && msg.request_id === requestId) {
+            // Piper failed for this request — resolve silently
             done()
           }
         } catch (e) {
@@ -188,7 +193,8 @@ export function useWebSocket(clientId: string, onSentence?: (text: string) => vo
       }
 
       ws.addEventListener('message', onMessage)
-      ws.send(JSON.stringify({ type: 'tts', text: clean }))
+      // FIX: Include request_id so backend echoes it back
+      ws.send(JSON.stringify({ type: 'tts', text: clean, request_id: requestId }))
     })
   }, [])
 

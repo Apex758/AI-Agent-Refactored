@@ -89,6 +89,7 @@ async def websocket_chat(ws: WebSocket, client_id: str):
             # Handle TTS requests directly in this WebSocket
             if msg.get("type") == "tts":
                 text = msg.get("text", "")
+                request_id = msg.get("request_id", "")  # <-- NEW
                 if text:
                     try:
                         from app.tts.speech_service import speech_service
@@ -98,13 +99,15 @@ async def websocket_chat(ws: WebSocket, client_id: str):
                         await ws_manager.send(client_id, {
                             "type": "tts_audio",
                             "audio": audio_b64,
-                            "format": "wav"
+                            "format": "wav",
+                            "request_id": request_id,  # <-- NEW: echo back
                         })
                     except Exception as e:
                         logger.error(f"TTS failed: {e}")
                         await ws_manager.send(client_id, {
                             "type": "tts_error",
-                            "message": str(e)
+                            "message": str(e),
+                            "request_id": request_id,  # <-- NEW: echo back
                         })
                 continue
             
