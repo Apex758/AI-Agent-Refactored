@@ -393,7 +393,15 @@ export default function Home() {
 
   const currentMessages  = currentChatId ? (messagesByChatId[currentChatId] || []) : []
   const currentDocuments = currentChatId ? (documentsByChatId[currentChatId] || []) : []
-  const { send }         = useWebSocket(currentChatId || '')
+
+  // Stable refs so onSentenceCallback never changes identity (avoids re-subscribing WS)
+  const voiceSpeakRef      = useRef<((text: string) => void) | undefined>(undefined)
+  const voiceEnabledRef    = useRef(false)
+  const onSentenceCallback = useCallback((text: string) => {
+    if (voiceEnabledRef.current) voiceSpeakRef.current?.(text)
+  }, [])
+
+  const { send, streamSpokenRef } = useWebSocket(currentChatId || '', onSentenceCallback)
 
   const [input, setInput]                 = useState('')
   const [showMemory, setShowMemory]       = useState(false)
@@ -404,6 +412,7 @@ export default function Home() {
   const [docPanelOpen, setDocPanelOpen]   = useState(false)
   const [uploadError, setUploadError]     = useState<string | null>(null)
   const [voiceEnabled, setVoiceEnabled]   = useState(false)
+  voiceEnabledRef.current = voiceEnabled  // render-phase sync — no useEffect needed
 
   const bottomRef    = useRef<HTMLDivElement>(null)
   const editInputRef = useRef<HTMLInputElement>(null)
@@ -421,6 +430,9 @@ export default function Home() {
   // ── Voice ──────────────────────────────────────────────────────
   const voice = useVoice(useCallback((text: string) => callbackRef.current(text), []))
 
+  // Keep voiceSpeakRef in sync so onSentenceCallback always calls the latest speak fn
+  useEffect(() => { voiceSpeakRef.current = voice.speak }, [voice.speak])
+
   useEffect(() => {
     callbackRef.current = (text: string) => {
       if (!currentChatId || isProcessing) return
@@ -435,6 +447,11 @@ export default function Home() {
     const last = currentMessages[currentMessages.length - 1]
     if (last?.role === 'assistant' && last.id !== lastSpokenId.current) {
       lastSpokenId.current = last.id
+      // Sentences were already spoken sentence-by-sentence during streaming — skip repeat
+      if (streamSpokenRef.current) {
+        streamSpokenRef.current = false
+        return
+      }
       voice.speak(last.content)
     }
   }, [currentMessages, voiceEnabled, voice])

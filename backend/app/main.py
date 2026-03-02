@@ -63,6 +63,14 @@ def create_app() -> FastAPI:
         logger.info(f"🤖 {settings.agent_name} starting...")
         logger.info(f"   LLM: {settings.llm_provider} / {settings.llm_model}")
         logger.info(f"   Memory: {settings.memory_workspace}")
+        # Pre-warm Piper TTS so the first speech request has no cold-start delay
+        import asyncio as _asyncio
+        from app.tts.speech_service import speech_service as _svc
+        try:
+            await _asyncio.get_event_loop().run_in_executor(None, _svc._get_voice)
+            logger.info("   Piper TTS pre-warmed ✓")
+        except Exception as _e:
+            logger.warning(f"   Piper TTS pre-warm skipped: {_e}")
 
     return app
 

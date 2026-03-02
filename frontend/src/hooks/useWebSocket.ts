@@ -7,14 +7,51 @@ import { cleanForTTS } from '@/utils/textCleaner'
 
 const WS_BASE = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000'
 
-export function useWebSocket(clientId: string) {
+/** Extract complete sentences from a streaming buffer.
+ *  Returns the sentences found plus any trailing text without terminal punctuation. */
+function extractSentences(buf: string): { sentences: string[]; remainder: string } {
+  const sentences: string[] = []
+  // Match any text ending with .  !  or  ?  (with optional trailing whitespace)
+  const re = /[^.!?]*[.!?]+\s*/g
+  let match: RegExpExecArray | null
+  let lastEnd = 0
+  while ((match = re.exec(buf)) !== null) {
+    const s = match[0].trim()
+    if (s.length > 2) sentences.push(s)
+    lastEnd = re.lastIndex
+  }
+  return { sentences, remainder: buf.slice(lastEnd) }
+}
+
+export function useWebSocket(clientId: string, onSentence?: (text: string) => void) {
   const wsRef = useRef<WebSocket | null>(null)
   const clientIdRef = useRef(clientId)
   const sendRef = useRef<((msg: string) => void) | null>(null)
   const messageQueueRef = useRef<string[]>([])
   const { appendStreaming, finalizeStreaming, setError, setCitations, addScrapedMedia } = useChatStore()
 
+  // Sentence-streaming TTS refs
+  const onSentenceRef   = useRef(onSentence)
+  const streamBufferRef = useRef('')       // accumulates LLM tokens
+  const streamSpokenRef = useRef(false)    // true once ≥1 sentence was TTS'd this stream
+
+  useEffect(() => { onSentenceRef.current = onSentence }, [onSentence])
   useEffect(() => { clientIdRef.current = clientId }, [clientId])
+
+  /** Flush complete sentences from the buffer; drain remainder on final call. */
+  const flushSentences = (isFinal: boolean) => {
+    if (!onSentenceRef.current) return
+    const { sentences, remainder } = extractSentences(streamBufferRef.current)
+    sentences.forEach(s => {
+      onSentenceRef.current!(s)
+      streamSpokenRef.current = true
+    })
+    if (isFinal && remainder.trim().length > 2) {
+      onSentenceRef.current(remainder.trim())
+      streamSpokenRef.current = true
+    }
+    streamBufferRef.current = isFinal ? '' : remainder
+  }
 
   const connect = useCallback((id: string) => {
     if (wsRef.current) {
@@ -33,8 +70,11 @@ export function useWebSocket(clientId: string) {
         switch (msg.type) {
           case 'token':
             appendStreaming(msg.content)
+            streamBufferRef.current += msg.content
+            flushSentences(false)
             break
           case 'complete':
+            flushSentences(true)
             finalizeStreaming()
             break
           case 'citations':
@@ -57,6 +97,9 @@ export function useWebSocket(clientId: string) {
     }
 
     ws.onopen = () => {
+      // Reset sentence-streaming state for fresh connection
+      streamBufferRef.current = ''
+      streamSpokenRef.current = false
       setError(null)
       // Drain any messages queued while the socket was connecting
       while (messageQueueRef.current.length > 0) {
@@ -160,5 +203,5 @@ export function useWebSocket(clientId: string) {
     }
   }, [])
 
-  return { send }
+  return { send, streamSpokenRef }
 }

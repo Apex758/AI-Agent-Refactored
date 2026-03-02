@@ -19,10 +19,12 @@ export function useVoice(onFinalTranscript: (text: string) => void): UseVoiceRet
   const [supported, setSupported]       = useState(false)
   const [interimText, setInterimText]   = useState('')
 
-  const recRef      = useRef<any>(null)
-  const callbackRef = useRef(onFinalTranscript)
-  const wsRef       = useRef<WebSocket | null>(null)
-  const audioRef    = useRef<HTMLAudioElement | null>(null)
+  const recRef         = useRef<any>(null)
+  const callbackRef    = useRef(onFinalTranscript)
+  const wsRef          = useRef<WebSocket | null>(null)
+  const audioRef       = useRef<HTMLAudioElement | null>(null)
+  const audioQueueRef  = useRef<string[]>([])   // object URLs waiting to play
+  const isPlayingRef   = useRef(false)
 
   useEffect(() => { callbackRef.current = onFinalTranscript }, [onFinalTranscript])
 
@@ -44,32 +46,33 @@ export function useVoice(onFinalTranscript: (text: string) => void): UseVoiceRet
       console.log('TTS WebSocket connected')
     }
     
-    ws.onmessage = async (event) => {
+    // Play the next URL in the queue (called recursively until empty)
+    const playNext = () => {
+      if (audioQueueRef.current.length === 0) {
+        isPlayingRef.current = false
+        setIsSpeaking(false)
+        audioRef.current = null
+        return
+      }
+      isPlayingRef.current = true
+      setIsSpeaking(true)
+      const url = audioQueueRef.current.shift()!
+      const audio = new Audio(url)
+      audioRef.current = audio
+      const onDone = () => { URL.revokeObjectURL(url); playNext() }
+      audio.onended = onDone
+      audio.onerror = onDone
+      audio.play().catch(onDone)
+    }
+
+    ws.onmessage = (event) => {
       const message = JSON.parse(event.data)
-      
       if (message.type === 'tts_audio') {
         const audioBytes = Uint8Array.from(atob(message.audio), c => c.charCodeAt(0))
         const blob = new Blob([audioBytes], { type: 'audio/wav' })
         const url = URL.createObjectURL(blob)
-        
-        if (audioRef.current) {
-          audioRef.current.pause()
-        }
-        
-        const audio = new Audio(url)
-        audioRef.current = audio
-        
-        audio.onplay = () => setIsSpeaking(true)
-        audio.onended = () => {
-          setIsSpeaking(false)
-          URL.revokeObjectURL(url)
-        }
-        audio.onerror = () => {
-          setIsSpeaking(false)
-          URL.revokeObjectURL(url)
-        }
-        
-        await audio.play()
+        audioQueueRef.current.push(url)
+        if (!isPlayingRef.current) playNext()
       } else if (message.type === 'tts_error') {
         console.error('TTS error:', message.message)
         setIsSpeaking(false)
@@ -94,6 +97,9 @@ export function useVoice(onFinalTranscript: (text: string) => void): UseVoiceRet
   // ── TTS ──────────────────────────────────────────────────────────
 
   const stopSpeaking = useCallback(() => {
+    // Clear the queue so no more sentences play
+    audioQueueRef.current = []
+    isPlayingRef.current = false
     if (audioRef.current) {
       audioRef.current.pause()
       audioRef.current = null
