@@ -54,49 +54,6 @@ class Gateway:
         )
         return self._personality
 
-
-async def maybe_create_milestones(chat_id: str, message: str):
-    """Detect learning intent and auto-create milestones."""
-    pattern = re.compile(
-        r"(?:i\s+(?:wanna|want to|need to)\s+(?:learn|understand|study)|"
-        r"(?:teach|explain)\s+me\s+(?:about\s+)?|how\s+does\s+|what\s+is\s+)(.{3,60}?)(?:\?|$|\.)",
-        re.IGNORECASE,
-    )
-    m = pattern.search(message.strip())
-    if not m:
-        return
-    topic = m.group(1).strip().rstrip("?.,!")
-    if len(topic) < 4:
-        return
-
-    store = get_milestone_store()
-    # Don't duplicate
-    if store.get_plan_for_topic(chat_id, topic):
-        return
-
-    # Simple fallback milestones (replace with LLM call if you want)
-    titles = ["Introduction", "Core Concepts", "Apply It", "Mastery Check"]
-    milestones = [
-        Milestone(
-            milestone_id=str(uuid.uuid4())[:8],
-            title=t,
-            description=f"Step {i+1} of learning {topic}.",
-            order=i + 1,
-            status=MilestoneStatus.AVAILABLE if i == 0 else MilestoneStatus.LOCKED,
-        )
-        for i, t in enumerate(titles)
-    ]
-    plan = MilestonePlan(
-        plan_id=str(uuid.uuid4())[:12],
-        chat_id=chat_id,
-        subject="General",
-        topic=topic,
-        milestones=milestones,
-    )
-    store.save_plan(plan)
-    logger.info(f"[milestones] Created plan for topic: {topic}")
-
-
     async def process(
         self,
         message: str,
@@ -130,6 +87,7 @@ async def maybe_create_milestones(chat_id: str, message: str):
 
         logger.info(f"[{channel}:{client_id}] Response: {response_text[:80]}...")
         return {"response": response_text, "citations": citations}
+
 
     async def process_stream(
         self,
@@ -341,6 +299,48 @@ async def maybe_create_milestones(chat_id: str, message: str):
         )
 
         return "\n".join(parts)
+
+
+async def maybe_create_milestones(chat_id: str, message: str):
+    """Detect learning intent and auto-create milestones."""
+    pattern = re.compile(
+        r"(?:i\s+(?:wanna|want to|need to)\s+(?:learn|understand|study)|"
+        r"(?:teach|explain)\s+me\s+(?:about\s+)?|how\s+does\s+|what\s+is\s+)(.{3,60}?)(?:\?|$|\.)",
+        re.IGNORECASE,
+    )
+    m = pattern.search(message.strip())
+    if not m:
+        return
+    topic = m.group(1).strip().rstrip("?.,!")
+    if len(topic) < 4:
+        return
+
+    store = get_milestone_store()
+    # Don't duplicate
+    if store.get_plan_for_topic(chat_id, topic):
+        return
+
+    # Simple fallback milestones (replace with LLM call if you want)
+    titles = ["Introduction", "Core Concepts", "Apply It", "Mastery Check"]
+    milestones = [
+        Milestone(
+            milestone_id=str(uuid.uuid4())[:8],
+            title=t,
+            description=f"Step {i+1} of learning {topic}.",
+            order=i + 1,
+            status=MilestoneStatus.AVAILABLE if i == 0 else MilestoneStatus.LOCKED,
+        )
+        for i, t in enumerate(titles)
+    ]
+    plan = MilestonePlan(
+        plan_id=str(uuid.uuid4())[:12],
+        chat_id=chat_id,
+        subject="General",
+        topic=topic,
+        milestones=milestones,
+    )
+    store.save_plan(plan)
+    logger.info(f"[milestones] Created plan for topic: {topic}")
 
 
 # Singleton

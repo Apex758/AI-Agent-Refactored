@@ -6,6 +6,9 @@
 
 ## Important Facts
 
+- User wants to learn about the water cycle
+
+
 - User wants to learn about the water cycle, prefers video tutorials
 
 
