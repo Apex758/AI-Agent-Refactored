@@ -8,7 +8,7 @@ Architecture:
   - DocumentProcessor: handles file ingestion
 """
 
-
+import asyncio
 import json
 import hashlib
 import sqlite3
@@ -26,15 +26,12 @@ logger.info(f"File system encoding: {__import__('sys').getfilesystemencoding()}"
 
 
 def _get_chroma_ef():
-    if settings.openai_api_key:
-        from chromadb.utils.embedding_functions import OpenAIEmbeddingFunction
-        return OpenAIEmbeddingFunction(
-            api_key=settings.openai_api_key,
-            model_name="text-embedding-3-small",
-        )
-    else:
-        from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
-        return SentenceTransformerEmbeddingFunction(model_name="all-MiniLM-L6-v2")
+    from chromadb.utils.embedding_functions import OpenAIEmbeddingFunction
+    return OpenAIEmbeddingFunction(
+        api_key=settings.openrouter_api_key,
+        api_base="https://openrouter.ai/api/v1",
+        model_name="openai/text-embedding-3-small",
+    )
 
 
 def _chunk_text(text: str, chunk_size: int = 400, overlap: int = 50) -> List[str]:
@@ -448,71 +445,64 @@ class MemoryManager:
         self.append_daily_log(
             f"**User ({client_id}):** {user_msg[:500]}\n\n**Assistant:** {assistant_msg[:500]}"
         )
-        try:
-            await self._extract_and_store_facts(user_msg, assistant_msg)
-        except Exception as e:
-            logger.warning(f"Fact extraction failed: {e}")
-        try:
-            await self.update_chat_memory(client_id, user_msg, assistant_msg)
-        except Exception as e:
-            logger.warning(f"Chat memory update failed: {e}")
-        try:
-            await self._auto_name_chat(client_id, user_msg, assistant_msg)
-        except Exception as e:
-            logger.warning(f"Chat auto-naming failed: {e}")
+        asyncio.create_task(self._combined_capture(user_msg, assistant_msg, client_id))
 
-    async def _extract_and_store_facts(self, user_msg: str, assistant_msg: str):
+    async def _combined_capture(self, user_msg: str, assistant_msg: str, client_id: str):
         from app.core.llm import get_llm
         llm = get_llm()
+
+        conn = sqlite3.connect(str(self.db_path))
+        row = conn.execute("SELECT name FROM chats WHERE id = ?", (client_id,)).fetchone()
+        conn.close()
+        needs_name = row and row[0].startswith("Chat ")
+        history = self.get_history(client_id, limit=30)
+        convo = "\n".join(f"{h['role'].upper()}: {h['content'][:300]}" for h in history)
+
         prompt = (
-            "Extract personal facts about the USER ONLY — preferences, habits, goals, opinions, personal details. "
-            "Do NOT include general knowledge or facts about the world.\n\n"
-            'Return JSON: {"facts": ["User likes X"]} or {"facts": []} if nothing personal.\n\n'
-            f"User: {user_msg[:300]}\nAssistant: {assistant_msg[:300]}"
+            "Analyze this conversation and return ONLY valid JSON with these keys:\n"
+            '{"facts": ["User likes X"], "summary": "2-3 sentence summary", '
+            '"keywords": ["kw1"], "key_facts": ["fact1"], "title": "3-5 word chat title"}\n\n'
+            f"User: {user_msg[:300]}\nAssistant: {assistant_msg[:300]}\n\nConversation:\n{convo[:2000]}"
         )
-        result = await llm.generate(
-            messages=[{"role": "user", "content": prompt}],
-            system_prompt="Extract personal user facts only. Return only valid JSON.",
-        )
-        content = result.get("content", "")
         try:
+            result = await llm.generate(
+                messages=[{"role": "user", "content": prompt}],
+                system_prompt="Return only valid JSON.",
+            )
+            content = result.get("content", "")
             if "{" in content:
-                json_str = content[content.index("{"):content.rindex("}") + 1]
-                data = json.loads(json_str)
+                data = json.loads(content[content.index("{"):content.rindex("}") + 1])
                 for fact in data.get("facts", []):
                     if fact.strip():
                         self.append_to_memory("Important Facts", f"- {fact.strip()}")
                         await self._index_text(fact.strip(), source="extracted_fact", metadata={"type": "user_fact"})
-        except (json.JSONDecodeError, ValueError):
-            pass
-
-    async def _auto_name_chat(self, chat_id: str, user_msg: str, assistant_msg: str):
-        conn = sqlite3.connect(str(self.db_path))
-        row = conn.execute("SELECT name FROM chats WHERE id = ?", (chat_id,)).fetchone()
-        conn.close()
-        if not row or not row[0].startswith("Chat "):
-            return
-        history = self.get_history(chat_id, limit=4)
-        if len(history) > 2:
-            return
-        from app.core.llm import get_llm
-        llm = get_llm()
-        result = await llm.generate(
-            messages=[{"role": "user", "content": (
-                "Give this conversation a short title (3-5 words max). "
-                "Topic-focused, like a chapter title. No quotes, no punctuation at end.\n\n"
-                f"User: {user_msg[:200]}\nAssistant: {assistant_msg[:200]}"
-            )}],
-            system_prompt="Generate short descriptive chat titles. Respond with only the title.",
-        )
-        name = result.get("content", "").strip().strip('"').strip("'")[:60]
-        if name:
-            conn = sqlite3.connect(str(self.db_path))
-            conn.execute("UPDATE chats SET name = ? WHERE id = ?", (name, chat_id))
-            conn.commit()
-            conn.close()
-            logger.info(f"Named chat {chat_id}: {name}")
-
+                summary = data.get("summary", "")
+                keywords = data.get("keywords", [])
+                key_facts = data.get("key_facts", [])
+                if summary:
+                    conn = sqlite3.connect(str(self.db_path))
+                    chat_row = conn.execute("SELECT name FROM chats WHERE id = ?", (client_id,)).fetchone()
+                    conn.close()
+                    chat_name = chat_row[0] if chat_row else client_id
+                    md = f"# Chat Memory: {chat_name}\n\n**Chat ID:** {client_id}\n"
+                    md += f"**Last Updated:** {datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n"
+                    md += f"## Summary\n{summary}\n\n## Keywords\n{', '.join(keywords)}\n\n"
+                    if key_facts:
+                        md += "## Key Facts\n" + "".join(f"- {f}\n" for f in key_facts)
+                    self._write_chat_memory(client_id, md)
+                    await self._index_text(summary, source=f"chat_summary:{client_id}",
+                        metadata={"type": "chat_summary", "chat_id": client_id, "chat_name": chat_name})
+                if needs_name and len(history) <= 4:
+                    name = data.get("title", "").strip().strip('"')[:60]
+                    if name:
+                        conn = sqlite3.connect(str(self.db_path))
+                        conn.execute("UPDATE chats SET name = ? WHERE id = ?", (name, client_id))
+                        conn.commit()
+                        conn.close()
+        except Exception as e:
+            logger.warning(f"Combined capture failed: {e}")
+            
+            
     # ── Auto-Recall ──────────────────────────────────────────────────
 
     async def auto_recall(self, query: str, top_k: int = 5) -> str:

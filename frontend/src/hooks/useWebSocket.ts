@@ -88,6 +88,14 @@ export function useWebSocket(clientId: string, onSentence?: (text: string) => vo
             addScrapedMedia(msg.images ?? [], msg.videos ?? [])
             break
           case 'whiteboard_scene':
+            // Pre-synthesize all subtitles immediately
+            if (msg.scene?.subtitles) {
+                msg.scene.subtitles.forEach((sub: any) => {
+                    if (ws.readyState === WebSocket.OPEN) {
+                        ws.send(JSON.stringify({ type: 'tts', text: cleanForTTS(sub.text) }))
+                    }
+                })
+            }
             handleWhiteboardScene(msg.scene)
             break
         }

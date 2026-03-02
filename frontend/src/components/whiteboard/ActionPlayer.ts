@@ -48,6 +48,7 @@ export class ActionPlayer {
     this.stopped = false
     this.currentIndex = 0
 
+
     // First, place the title on the board
     if (this.scene.title) {
       this.callbacks.onWhiteboardAction({

@@ -148,7 +148,8 @@ async def websocket_chat(ws: WebSocket, client_id: str):
                     re.IGNORECASE,
                 )
                 should_generate_scene = bool(
-                    full_response and (
+                    full_response and 
+                    len(full_response) > 200 and    (
                         LEARNING_RE.search(user_message) or
                         RESPONSE_LESSON_RE.search(full_response)
                     )
