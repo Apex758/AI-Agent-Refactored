@@ -389,7 +389,7 @@ export default function Home() {
 
   // FIX 3: watch board mode for auto-collapse
   const { mode, setMode } = useUIStore()
-  const { placeYouTubeVideos, placeScrapedMedia, focusOrPlaceMedia } = useWhiteboardStore()
+  const { placeYouTubeVideos, placeScrapedMedia, focusOrPlaceMedia, clearWhiteboard } = useWhiteboardStore()
 
   const currentMessages  = currentChatId ? (messagesByChatId[currentChatId] || []) : []
   const currentDocuments = currentChatId ? (documentsByChatId[currentChatId] || []) : []
@@ -400,8 +400,8 @@ export default function Home() {
   const [memoryContent, setMemoryContent] = useState('')
   const [editingChatId, setEditingChatId] = useState<string | null>(null)
   const [editName, setEditName]           = useState('')
-  const [sidebarOpen, setSidebarOpen]     = useState(true)
-  const [docPanelOpen, setDocPanelOpen]   = useState(true)
+  const [sidebarOpen, setSidebarOpen]     = useState(false)
+  const [docPanelOpen, setDocPanelOpen]   = useState(false)
   const [uploadError, setUploadError]     = useState<string | null>(null)
   const [voiceEnabled, setVoiceEnabled]   = useState(false)
 
@@ -594,7 +594,7 @@ export default function Home() {
             className="btn-outline px-3 py-1.5 text-xs"
           >Memory</button>
           <button
-            onClick={e => { e.stopPropagation(); clearChat() }}
+            onClick={e => { e.stopPropagation(); clearWhiteboard() }}
             className="btn-outline px-3 py-1.5 text-xs"
           >Clear</button>
         </>

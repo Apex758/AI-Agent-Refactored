@@ -6,6 +6,9 @@
 
 ## Important Facts
 
+- User wants to watch a video of a duck
+
+
 - User wants to see a video of a duck
 
 

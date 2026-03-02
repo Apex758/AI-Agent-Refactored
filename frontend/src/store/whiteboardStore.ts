@@ -12,6 +12,7 @@ interface WhiteboardStore {
   setEditor: (editor: Editor | null) => void
   saveSnapshot: (chatId: string) => void
   loadSnapshot: (chatId: string) => void
+  clearWhiteboard: () => void
   exportAsImage: () => Promise<Blob | null>
   presentOnBoard: (scenePlan: ScenePlan) => void
   placeScrapedMedia: (images: string[], videoIds: string[]) => void
@@ -51,6 +52,18 @@ export const useWhiteboardStore = create<WhiteboardStore>((set, get) => ({
       } catch (e) {
         console.warn('Failed to load whiteboard snapshot:', e)
       }
+    }
+  },
+
+  clearWhiteboard: () => {
+    const { editorRef } = get()
+    if (!editorRef) return
+    try {
+      // Delete all shapes on the current page
+      const shapeIds = [...editorRef.getCurrentPageShapeIds()]
+      editorRef.store.remove(shapeIds)
+    } catch (e) {
+      console.warn('Failed to clear whiteboard:', e)
     }
   },
 

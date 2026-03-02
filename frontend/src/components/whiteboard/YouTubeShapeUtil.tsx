@@ -1,6 +1,7 @@
 'use client'
 import { useState } from 'react'
 import { BaseBoxShapeUtil, TLBaseShape, T } from 'tldraw'
+import Icon from '../Icon'
 
 // ── Shape type ────────────────────────────────────────────────────
 export type YouTubeShape = TLBaseShape<
