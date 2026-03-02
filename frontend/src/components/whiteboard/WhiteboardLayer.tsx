@@ -5,7 +5,6 @@ import { useCallback, useState } from 'react'
 import { useWhiteboardStore } from '@/store/whiteboardStore'
 import { useChatStore } from '@/store/chatStore'
 import MilestoneBar from '@/components/whiteboard/MilestoneBar'
-import SubtitleOverlay from '@/components/whiteboard/SubtitleOverlay'
 import Icon from '@/components/Icon'
 
 const Whiteboard = dynamic(() => import('./Whiteboard'), {
@@ -23,7 +22,7 @@ interface WhiteboardLayerProps {
 }
 
 export default function WhiteboardLayer({ chatId, onAfterSnapshot }: WhiteboardLayerProps) {
-  const { exportAsImage, currentSubtitle, playbackState } = useWhiteboardStore()
+  const { exportAsImage } = useWhiteboardStore()
   const { addMessage } = useChatStore()
   const [exporting, setExporting] = useState(false)
 
@@ -83,9 +82,6 @@ export default function WhiteboardLayer({ chatId, onAfterSnapshot }: WhiteboardL
       >
         <Icon name="camera" size={14} /> {exporting ? 'Exporting…' : 'Send to Chat'}
       </button>
-
-      {/* Subtitle overlay for teaching mode playback */}
-      <SubtitleOverlay text={currentSubtitle} playback={playbackState} />
 
       {/* Milestone progress bar — bottom right */}
       <MilestoneBar chatId={chatId} />

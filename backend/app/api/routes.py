@@ -4,6 +4,7 @@ API Routes — REST endpoints + WebSocket for real-time web chat.
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException
 from pydantic import BaseModel
 from typing import Optional, Dict
+import asyncio
 import json
 
 from app.agent.gateway import get_gateway

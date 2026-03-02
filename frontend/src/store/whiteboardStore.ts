@@ -340,13 +340,25 @@ export const useWhiteboardStore = create<WhiteboardStore>((set, get) => ({
         // Clean action text before placing on board
         const cleanText = cleanForWhiteboard(action.text)
 
+        // Convert grid position to viewport-relative canvas coords (mirrors presentOnBoard)
+        const vb = ed.getViewportScreenBounds()
+        const topLeft = ed.screenToPage({ x: vb.x, y: vb.y })
+        const bottomRight = ed.screenToPage({ x: vb.x + vb.w, y: vb.y + vb.h })
+        const vpW = bottomRight.x - topLeft.x
+        const vpH = bottomRight.y - topLeft.y
+        // Column width (up to 3 cols), row height capped at 120px
+        const colW = vpW / 3
+        const rowH = Math.min(vpH / 8, 120)
+        const px = topLeft.x + action.position.x * colW
+        const py = topLeft.y + 50 + action.position.y * rowH   // +50 leaves room for title
+
         if (action.type === 'create_text') {
           const shapeId = createShapeId(action.id)
           ed.createShape({
             id: shapeId,
             type: 'text',
-            x: action.position.x * 100,
-            y: action.position.y * 100,
+            x: px,
+            y: py,
             props: {
               text: cleanText,
               size: action.style === 'heading' ? 'xl' : action.style === 'body' ? 'm' : 'l',
@@ -357,12 +369,12 @@ export const useWhiteboardStore = create<WhiteboardStore>((set, get) => ({
           ed.createShape({
             id: shapeId,
             type: 'geo',
-            x: action.position.x * 100,
-            y: action.position.y * 100,
+            x: px,
+            y: py,
             props: {
               geo: 'rectangle',
-              w: 200,
-              h: 100,
+              w: colW * 0.9,
+              h: rowH * 0.85,
             },
           })
         } else if (action.type === 'highlight') {
@@ -394,6 +406,18 @@ export const useWhiteboardStore = create<WhiteboardStore>((set, get) => ({
 
     currentPlayer = player
     player.play()
+
+    // After ActionPlayer's initial 400ms render pause, zoom to fit all placed shapes
+    setTimeout(() => {
+      const { editorRef: ed } = get()
+      if (!ed) return
+      try {
+        const shapeIds = [...ed.getCurrentPageShapeIds()]
+        if (shapeIds.length > 0) ed.zoomToFit({ animation: { duration: 400 } })
+      } catch (e) {
+        // zoomToFit not critical — ignore errors
+      }
+    }, 600)
   },
 
   stopPlayback: () => {

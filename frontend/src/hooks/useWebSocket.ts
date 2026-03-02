@@ -11,6 +11,7 @@ export function useWebSocket(clientId: string) {
   const wsRef = useRef<WebSocket | null>(null)
   const clientIdRef = useRef(clientId)
   const sendRef = useRef<((msg: string) => void) | null>(null)
+  const messageQueueRef = useRef<string[]>([])
   const { appendStreaming, finalizeStreaming, setError, setCitations, addScrapedMedia } = useChatStore()
 
   useEffect(() => { clientIdRef.current = clientId }, [clientId])
@@ -55,7 +56,14 @@ export function useWebSocket(clientId: string) {
       }
     }
 
-    ws.onopen = () => setError(null)
+    ws.onopen = () => {
+      setError(null)
+      // Drain any messages queued while the socket was connecting
+      while (messageQueueRef.current.length > 0) {
+        const queued = messageQueueRef.current.shift()!
+        ws.send(JSON.stringify({ message: queued }))
+      }
+    }
     ws.onclose = () => {
       setTimeout(() => {
         if (clientIdRef.current === id) connect(id)
@@ -77,47 +85,72 @@ export function useWebSocket(clientId: string) {
   }, [clientId])
 
 
+  // Browser SpeechSynthesis fallback — used when server TTS fails or is unavailable
+  const speakBrowser = useCallback((text: string): Promise<void> => {
+    return new Promise((resolve) => {
+      if (typeof window === 'undefined' || !window.speechSynthesis) {
+        resolve()
+        return
+      }
+      window.speechSynthesis.cancel()
+      const utt = new SpeechSynthesisUtterance(text)
+      utt.rate = 1.05
+      utt.onend = () => resolve()
+      utt.onerror = () => resolve()
+      window.speechSynthesis.speak(utt)
+    })
+  }, [])
+
   // Helper to send TTS request and wait for audio playback to complete
   const speakAndWait = useCallback((text: string): Promise<void> => {
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve) => {
       const ws = wsRef.current
-      if (!ws || ws.readyState !== WebSocket.OPEN) {
-        console.warn('WebSocket not connected for TTS')
-        resolve()
-        return
-      }
-
-      // Clean text for TTS using proper utility
       const clean = cleanForTTS(text)
-      if (!clean) {
-        resolve()
+      if (!clean) { resolve(); return }
+
+      // No open WebSocket — go straight to browser TTS
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        speakBrowser(clean).then(resolve)
         return
       }
 
-      // Set up one-time listener for TTS audio response
+      let resolved = false
+      const done = (fallback = false) => {
+        if (resolved) return
+        resolved = true
+        clearTimeout(timer)
+        ws.removeEventListener('message', onMessage)
+        if (fallback) {
+          speakBrowser(clean).then(resolve)
+        } else {
+          resolve()
+        }
+      }
+
+      // 15-second fallback so ActionPlayer never hangs on a dead TTS promise
+      const timer = setTimeout(() => done(true), 15000)
+
       const onMessage = (event: MessageEvent) => {
         try {
           const msg = JSON.parse(event.data)
           if (msg.type === 'tts_audio') {
+            // Stop listening before playing so we don't catch the next subtitle's audio
+            clearTimeout(timer)
             ws.removeEventListener('message', onMessage)
-            // Decode base64 audio and play
+            resolved = true
             const binary = atob(msg.audio)
             const bytes = new Uint8Array(binary.length)
-            for (let i = 0; i < binary.length; i++) {
-              bytes[i] = binary.charCodeAt(i)
-            }
+            for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
             const blob = new Blob([bytes], { type: 'audio/mp3' })
             const url = URL.createObjectURL(blob)
             const audio = new Audio(url)
-            audio.onended = () => {
-              URL.revokeObjectURL(url)
-              resolve()
-            }
-            audio.onerror = () => {
-              URL.revokeObjectURL(url)
-              resolve()
-            }
-            audio.play().catch(() => resolve())
+            const onDone = () => { URL.revokeObjectURL(url); resolve() }
+            audio.onended = onDone
+            audio.onerror = onDone
+            audio.play().catch(() => onDone())
+          } else if (msg.type === 'tts_error') {
+            // Server TTS failed — fall back to browser speech so user still hears audio
+            done(true)
           }
         } catch (e) {
           // Not our message, ignore
@@ -125,14 +158,9 @@ export function useWebSocket(clientId: string) {
       }
 
       ws.addEventListener('message', onMessage)
-      
-      // Send TTS request with cleaned text
-      ws.send(JSON.stringify({
-        type: 'tts',
-        text: clean,
-      }))
+      ws.send(JSON.stringify({ type: 'tts', text: clean }))
     })
-  }, [])
+  }, [speakBrowser])
 
   const handleWhiteboardScene = useCallback((scene: any) => {
     if (!scene) return
@@ -147,6 +175,9 @@ export function useWebSocket(clientId: string) {
   const send = useCallback((message: string) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({ message }))
+    } else {
+      // Queue the message — will be flushed in ws.onopen when the socket connects
+      messageQueueRef.current.push(message)
     }
   }, [])
 

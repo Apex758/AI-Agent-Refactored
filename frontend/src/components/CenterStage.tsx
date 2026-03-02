@@ -4,6 +4,7 @@ import { ReactNode } from 'react'
 import { useUIStore } from '@/store/uiStore'
 import { useWhiteboardStore } from '@/store/whiteboardStore'
 import WhiteboardLayer from '@/components/whiteboard/WhiteboardLayer'
+import SubtitleOverlay from '@/components/whiteboard/SubtitleOverlay'
 import FloatingMic from '@/components/FloatingMic'
 import Icon from '@/components/Icon'
 import type { UseVoiceReturn } from '@/hooks/useVoice'
@@ -57,7 +58,7 @@ export default function CenterStage({
   onAfterSnapshot,
 }: CenterStageProps) {
   const { mode, setMode } = useUIStore()
-  const { saveSnapshot } = useWhiteboardStore()
+  const { saveSnapshot, currentSubtitle, playbackState } = useWhiteboardStore()
 
   const handleSetMode = (newMode: UIMode) => {
     if (mode === 'whiteboard' && newMode === 'chat' && chatId) {
@@ -117,6 +118,9 @@ export default function CenterStage({
             )}
           </div>
         )}
+
+        {/* Subtitle overlay — visible over BOTH chat and whiteboard during TTS playback */}
+        <SubtitleOverlay text={currentSubtitle} playback={playbackState} />
       </div>
     </div>
   )
