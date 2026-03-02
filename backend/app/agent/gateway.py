@@ -65,8 +65,8 @@ class Gateway:
         """
         logger.info(f"[{channel}:{client_id}] Processing: {message[:80]}...")
 
-        # Auto-create milestones if learning intent detected
-        await maybe_create_milestones(client_id, message)
+        # Auto-create milestones if learning intent detected (DISABLED — agent now calls create_learning_plan tool)
+        # await maybe_create_milestones(client_id, message)
 
         self.memory.save_message(client_id, "user", message)
         memory_context = await self.memory.auto_recall(message)
@@ -77,7 +77,7 @@ class Gateway:
         doc_results = await self.memory.search_documents(message, chat_id=client_id, top_k=5)
         doc_context, citations = self.memory.format_doc_context(doc_results)
 
-        system_prompt = self._build_system_prompt(memory_context, doc_context)
+        system_prompt = self._build_system_prompt(memory_context, doc_context, message=message, chat_id=client_id)
         tool_schemas = self.tools.get_tool_schemas()
 
         response_text = await self._agent_loop(messages, system_prompt, tool_schemas)
@@ -104,8 +104,8 @@ class Gateway:
         """
         self.memory.save_message(client_id, "user", message)
 
-        # Auto-create milestones if learning intent detected
-        await maybe_create_milestones(client_id, message)
+        # Auto-create milestones if learning intent detected (DISABLED — agent now calls create_learning_plan tool)
+        # await maybe_create_milestones(client_id, message)
 
         memory_context = await self.memory.auto_recall(message)
         history = self.memory.get_history(client_id, limit=20)
@@ -116,7 +116,7 @@ class Gateway:
         doc_context, citations = self.memory.format_doc_context(doc_results)
         yield {"type": "citations", "citations": citations}
 
-        system_prompt = self._build_system_prompt(memory_context, doc_context)
+        system_prompt = self._build_system_prompt(memory_context, doc_context, message=message, chat_id=client_id)
         tool_schemas = self.tools.get_tool_schemas()
 
         # Run the full agent loop (supports tool calls) and collect scraped media
@@ -280,8 +280,23 @@ class Gateway:
 
         return "Reached maximum tool call limit."
 
-    def _build_system_prompt(self, memory_context: str, doc_context: str = "") -> str:
+    def _build_system_prompt(self, memory_context: str, doc_context: str = "", message: str = "", chat_id: str = "") -> str:
         parts = [self.get_personality()]
+
+        # Inject chat_id for tool calls
+        if chat_id:
+            parts.append(f"\nCurrent chat_id: {chat_id}\nAlways use this exact chat_id when calling create_learning_plan or milestone_check.")
+
+        # Inject learning mode instructions only when needed
+        LEARNING_RE = re.compile(
+            r'\b(learn|teach me|explain|study|understand|how does|what is|walk me through)\b',
+            re.IGNORECASE
+        )
+        if LEARNING_RE.search(message):
+            learning_path = settings.agent_personality.replace("personality.txt", "learning_mode.txt")
+            if os.path.exists(learning_path):
+                with open(learning_path) as f:
+                    parts.append(f.read())
 
         if memory_context:
             parts.append(f"\n--- YOUR MEMORY ---\n{memory_context}\n--- END MEMORY ---\n")
@@ -320,13 +335,19 @@ async def maybe_create_milestones(chat_id: str, message: str):
     if store.get_plan_for_topic(chat_id, topic):
         return
 
-    # Simple fallback milestones (replace with LLM call if you want)
-    titles = ["Introduction", "Core Concepts", "Apply It", "Mastery Check"]
+    # 5-milestone framework
+    titles = [
+        ("Exposure",        f"First contact with {topic} — student recognizes it and shows curiosity."),
+        ("Understanding",   f"Grasps the core meaning, vocabulary, and key concepts of {topic}."),
+        ("Guided Practice", f"Works through {topic} tasks with support and feedback."),
+        ("Independence",    f"Completes {topic} tasks alone and self-checks their work."),
+        ("Creative Use",    f"Applies {topic} in new ways, solves problems, or creates something."),
+    ]
     milestones = [
         Milestone(
             milestone_id=str(uuid.uuid4())[:8],
-            title=t,
-            description=f"Step {i+1} of learning {topic}.",
+            title=f"{t[0]} of {topic}",
+            description=t[1],
             order=i + 1,
             status=MilestoneStatus.AVAILABLE if i == 0 else MilestoneStatus.LOCKED,
         )

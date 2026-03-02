@@ -168,6 +168,32 @@ class ToolRegistry:
             handler=self._milestone_check,
         ))
 
+        # ── Learning plan creation tool ──
+        self.register(Tool(
+            name="create_learning_plan",
+            description=(
+                "Save the milestone learning plan you just presented to the student. "
+                "Call this immediately after presenting the 5-milestone learning path. "
+                "Pass the full title and description for each milestone."
+            ),
+            parameters={"type": "object", "properties": {
+                "chat_id": {"type": "string"},
+                "topic": {"type": "string"},
+                "subject": {"type": "string", "default": "General"},
+                "milestones": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "title": {"type": "string"},
+                            "description": {"type": "string"}
+                        }
+                    }
+                }
+            }, "required": ["chat_id", "topic", "milestones"]},
+            handler=self._create_learning_plan,
+        ))
+
     # ── Handlers ─────────────────────────────────────────────────────
 
     async def _web_search(self, query: str) -> Dict:
@@ -368,6 +394,39 @@ class ToolRegistry:
         except Exception as e:
             logger.error(f"milestone_check failed: {e}")
             return {"error": str(e)}
+
+    async def _create_learning_plan(self, chat_id: str, topic: str, milestones: list, subject: str = "General") -> Dict:
+        """Create a new milestone learning plan for the student."""
+        import re
+        import uuid
+        from app.milestones.milestone_store import get_milestone_store, MilestonePlan, Milestone, MilestoneStatus
+
+        def _strip_emojis(text: str) -> str:
+            return re.sub(r'[^\x00-\x7F\u00C0-\u024F\u1E00-\u1EFF]+', '', text).strip()
+
+        store = get_milestone_store()
+        if store.get_plan_for_topic(chat_id, topic):
+            return {"status": "already_exists", "topic": topic}
+
+        ms = [
+            Milestone(
+                milestone_id=str(uuid.uuid4())[:8],
+                title=_strip_emojis(m["title"]),
+                description=_strip_emojis(m["description"]),
+                order=i + 1,
+                status=MilestoneStatus.AVAILABLE if i == 0 else MilestoneStatus.LOCKED,
+            )
+            for i, m in enumerate(milestones[:5])
+        ]
+        plan = MilestonePlan(
+            plan_id=str(uuid.uuid4())[:12],
+            chat_id=chat_id,
+            subject=subject,
+            topic=topic,
+            milestones=ms,
+        )
+        store.save_plan(plan)
+        return {"status": "created", "plan_id": plan.plan_id, "topic": topic}
 
 
 # Singleton

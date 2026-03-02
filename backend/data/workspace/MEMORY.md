@@ -6,6 +6,30 @@
 
 ## Important Facts
 
+- User wants to learn about the types of fruits
+
+
+- User wants to learn about types of fruits
+
+
+- User wants to learn about types of meats
+
+
+- User wants to learn about types of meats
+
+
+- User wants to learn about types of meats
+
+
+- User wants to learn about types of meats (new learning session started)
+
+
+- User wants to learn about types of meats
+
+
+- User wants to learn about types of meats
+
+
 - User wants to learn simple addition
 
 
