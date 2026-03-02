@@ -141,7 +141,7 @@ export function useWebSocket(clientId: string) {
             const binary = atob(msg.audio)
             const bytes = new Uint8Array(binary.length)
             for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
-            const blob = new Blob([bytes], { type: 'audio/mp3' })
+            const blob = new Blob([bytes], { type: 'audio/wav' })
             const url = URL.createObjectURL(blob)
             const audio = new Audio(url)
             const onDone = () => { URL.revokeObjectURL(url); resolve() }

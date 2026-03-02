@@ -325,6 +325,17 @@ export const useWhiteboardStore = create<WhiteboardStore>((set, get) => ({
       currentPlayer = null
     }
 
+    // ── Capture viewport origin ONCE at scene start ──────────────────
+    // All shapes in this scene use these fixed coords regardless of later
+    // panning/zooming, so the layout stays consistent.
+    const vb = editorRef.getViewportScreenBounds()
+    const sceneTL = editorRef.screenToPage({ x: vb.x, y: vb.y })
+    const sceneBR = editorRef.screenToPage({ x: vb.x + vb.w, y: vb.y + vb.h })
+    const sceneVpW = sceneBR.x - sceneTL.x
+    const sceneVpH = sceneBR.y - sceneTL.y
+    const sceneColW = sceneVpW / 3
+    const sceneRowH = Math.min(sceneVpH / 8, 120)
+
     // Create ActionPlayer with callbacks
     const player = new ActionPlayer(scene, {
       onSubtitle: (text: string) => {
@@ -337,20 +348,10 @@ export const useWhiteboardStore = create<WhiteboardStore>((set, get) => ({
         const { editorRef: ed } = get()
         if (!ed) return
 
-        // Clean action text before placing on board
         const cleanText = cleanForWhiteboard(action.text)
-
-        // Convert grid position to viewport-relative canvas coords (mirrors presentOnBoard)
-        const vb = ed.getViewportScreenBounds()
-        const topLeft = ed.screenToPage({ x: vb.x, y: vb.y })
-        const bottomRight = ed.screenToPage({ x: vb.x + vb.w, y: vb.y + vb.h })
-        const vpW = bottomRight.x - topLeft.x
-        const vpH = bottomRight.y - topLeft.y
-        // Column width (up to 3 cols), row height capped at 120px
-        const colW = vpW / 3
-        const rowH = Math.min(vpH / 8, 120)
-        const px = topLeft.x + action.position.x * colW
-        const py = topLeft.y + 50 + action.position.y * rowH   // +50 leaves room for title
+        // Use scene-start viewport — stays fixed even if user pans/zooms
+        const px = sceneTL.x + action.position.x * sceneColW
+        const py = sceneTL.y + 50 + action.position.y * sceneRowH
 
         if (action.type === 'create_text') {
           const shapeId = createShapeId(action.id)
@@ -373,8 +374,8 @@ export const useWhiteboardStore = create<WhiteboardStore>((set, get) => ({
             y: py,
             props: {
               geo: 'rectangle',
-              w: colW * 0.9,
-              h: rowH * 0.85,
+              w: sceneColW * 0.9,
+              h: sceneRowH * 0.85,
             },
           })
         } else if (action.type === 'highlight') {

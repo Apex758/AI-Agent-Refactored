@@ -135,14 +135,25 @@ async def websocket_chat(ws: WebSocket, client_id: str):
                 await ws_manager.send(client_id, {"type": "complete", "content": full_response})
 
                 # ── Whiteboard scene (teaching mode) ──
-                # After chat response completes, check if this was a learning query
-                # and generate a structured whiteboard scene.
+                # Trigger on user learning keywords OR when the response itself
+                # contains lesson/milestone content (e.g. after "Yes. Begin.")
                 import re
                 LEARNING_RE = re.compile(
-                    r'\b(learn|teach me|explain|study|understand|how does|what is|walk me through)\b',
+                    r'\b(learn|teach|explain|study|understand|how does|what is|walk me through)\b',
                     re.IGNORECASE,
                 )
-                if full_response and LEARNING_RE.search(user_message):
+                RESPONSE_LESSON_RE = re.compile(
+                    r'\b(milestone|stage|lesson|exposure|practice|caterpillar|evaporation|metamorphosis)\b'
+                    r'|\*\*Milestone\b',
+                    re.IGNORECASE,
+                )
+                should_generate_scene = bool(
+                    full_response and (
+                        LEARNING_RE.search(user_message) or
+                        RESPONSE_LESSON_RE.search(full_response)
+                    )
+                )
+                if should_generate_scene:
                     # Fire-and-forget: process_teaching adds ~2s LLM round-trip, don't block TTS
                     async def send_scene():
                         scene = await gateway.process_teaching(full_response, user_message, client_id)

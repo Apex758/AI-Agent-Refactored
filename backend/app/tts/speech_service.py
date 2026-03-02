@@ -1,83 +1,73 @@
-"""Piper TTS Service for text-to-speech."""
+"""Piper TTS Service — wraps piper.voice.PiperVoice."""
 import io
 import logging
 import os
-import tempfile
+import wave
 from typing import Optional
 
 logger = logging.getLogger(__name__)
 
 
 class SpeechService:
-    """Piper text-to-speech service."""
-    
+    """Text-to-speech using the local Piper ONNX model."""
+
     def __init__(self, model_path: Optional[str] = None):
-        """Initialize the Piper TTS service.
-        
-        Args:
-            model_path: Path to Piper model file (.onnx). 
-                       If None, uses default en_US-lessac-medium.onnx
-        """
         self.model_path = model_path
-        self.initialized = False
-    
-    async def initialize(self):
-        """Initialize the Piper TTS model."""
-        if self.initialized:
-            return
-        
+        self._voice = None   # lazy-loaded on first synthesize call
+
+    def _get_voice(self):
+        if self._voice is not None:
+            return self._voice
+
         try:
-            from piper_tts import PiperTTS
-            
-            logger.info("Initializing Piper TTS model...")
-            
-            # Use default model if not specified
+            from piper.voice import PiperVoice  # piper-tts package
+
             if not self.model_path:
-                # Default to a lightweight English model in backend/data/models/piper/
-                base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
-                self.model_path = os.path.join(base_dir, "data", "models", "piper", "en_GB-cori-high.onnx")
-            
-            self.tts = PiperTTS(self.model_path)
-            self.initialized = True
-            logger.info(f"Piper TTS model initialized: {self.model_path}")
+                # speech_service.py lives at backend/app/tts/ → 3 levels up = backend/
+                base_dir = os.path.dirname(
+                    os.path.dirname(os.path.dirname(__file__))
+                )
+                self.model_path = os.path.join(
+                    base_dir, "data", "models", "piper", "en_GB-cori-high.onnx"
+                )
+
+            logger.info(f"Loading Piper TTS model: {self.model_path}")
+            self._voice = PiperVoice.load(self.model_path)
+            logger.info("Piper TTS model loaded successfully")
+            return self._voice
+
         except Exception as e:
             logger.error(f"Failed to initialize Piper TTS: {e}")
             raise
-    
+
     async def synthesize(self, text: str, speed: float = 1.0) -> bytes:
-        """Synthesize speech from text.
-        
+        """Synthesize *text* and return WAV bytes.
+
         Args:
-            text: Text to synthesize
-            speed: Speech speed (1.0 = normal, higher = faster)
-        
+            text:  Text to speak.
+            speed: Ignored for now (PiperVoice uses SynthesisConfig for speed).
+
         Returns:
-            Audio data as WAV bytes
+            WAV-encoded audio bytes ready to send to the browser.
         """
-        if not self.initialized:
-            await self.initialize()
-        
-        try:
-            # Generate audio to a temporary file
-            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as tmp:
-                tmp_path = tmp.name
-            
-            # Synthesize
-            await self.tts.synthesize(text, tmp_path, sample_rate=16000)
-            
-            # Read the generated audio
-            with open(tmp_path, 'rb') as f:
-                audio_bytes = f.read()
-            
-            # Clean up
-            os.unlink(tmp_path)
-            
-            return audio_bytes
-            
-        except Exception as e:
-            logger.error(f"TTS synthesis failed: {e}")
-            raise
+        voice = self._get_voice()
+
+        # Collect raw 16-bit PCM chunks from the model
+        raw_pcm = b""
+        sample_rate = voice.config.sample_rate
+        for chunk in voice.synthesize(text):
+            raw_pcm += chunk.audio_int16_bytes
+
+        # Wrap PCM in a proper WAV container so the browser can decode it
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as wf:
+            wf.setnchannels(1)       # mono
+            wf.setsampwidth(2)       # 16-bit PCM
+            wf.setframerate(sample_rate)
+            wf.writeframes(raw_pcm)
+
+        return buf.getvalue()
 
 
-# Global TTS service instance
+# Module-level singleton reused across requests
 speech_service = SpeechService()
