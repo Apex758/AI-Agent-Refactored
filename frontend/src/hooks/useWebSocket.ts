@@ -9,6 +9,7 @@ const WS_BASE = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000'
 export function useWebSocket(clientId: string) {
   const wsRef = useRef<WebSocket | null>(null)
   const clientIdRef = useRef(clientId)
+  const sendRef = useRef<((msg: string) => void) | null>(null)
   const { appendStreaming, finalizeStreaming, setError, setCitations, addScrapedMedia } = useChatStore()
 
   useEffect(() => { clientIdRef.current = clientId }, [clientId])
@@ -75,15 +76,72 @@ export function useWebSocket(clientId: string) {
   }, [clientId])
 
 
+  // Helper to send TTS request and wait for audio playback to complete
+  const speakAndWait = useCallback((text: string): Promise<void> => {
+    return new Promise((resolve, reject) => {
+      const ws = wsRef.current
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        console.warn('WebSocket not connected for TTS')
+        resolve()
+        return
+      }
+
+      // Clean text for TTS
+      const clean = text.replace(/[#*_~`]/g, '').trim()
+      if (!clean) {
+        resolve()
+        return
+      }
+
+      // Set up one-time listener for TTS audio response
+      const onMessage = (event: MessageEvent) => {
+        try {
+          const msg = JSON.parse(event.data)
+          if (msg.type === 'tts_audio') {
+            ws.removeEventListener('message', onMessage)
+            // Decode base64 audio and play
+            const binary = atob(msg.audio)
+            const bytes = new Uint8Array(binary.length)
+            for (let i = 0; i < binary.length; i++) {
+              bytes[i] = binary.charCodeAt(i)
+            }
+            const blob = new Blob([bytes], { type: 'audio/mp3' })
+            const url = URL.createObjectURL(blob)
+            const audio = new Audio(url)
+            audio.onended = () => {
+              URL.revokeObjectURL(url)
+              resolve()
+            }
+            audio.onerror = () => {
+              URL.revokeObjectURL(url)
+              resolve()  // Don't reject, just continue
+            }
+            audio.play().catch(() => resolve())
+          }
+        } catch (e) {
+          // Not our message, ignore
+        }
+      }
+
+      ws.addEventListener('message', onMessage)
+      
+      // Send TTS request
+      ws.send(JSON.stringify({
+        type: 'tts',
+        text: clean,
+      }))
+    })
+  }, [])
+
   const handleWhiteboardScene = useCallback((scene: any) => {
     if (!scene) return
     // Switch to whiteboard mode
     useUIStore.getState().setMode('whiteboard')
     // Small delay to let TLDraw mount, then play the scene
     setTimeout(() => {
-      useWhiteboardStore.getState().playScene(scene)
+      useWhiteboardStore.getState().playScene(scene, speakAndWait)
     }, 500)
-  }, [])
+  }, [speakAndWait])
   
   const send = useCallback((message: string) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {

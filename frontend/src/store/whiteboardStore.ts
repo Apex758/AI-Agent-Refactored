@@ -3,12 +3,17 @@ import type { Editor } from 'tldraw'
 import { createShapeId } from 'tldraw'
 import type { ScenePlan } from '@/components/whiteboard/types'
 import type { WhiteboardScene, WhiteboardAction, PlaybackState } from '@/types/whiteboard-sync'
+import { ActionPlayer } from '@/components/whiteboard/ActionPlayer'
 
 interface WhiteboardStore {
   /** TLDraw snapshots keyed by chatId */
   snapshots: Record<string, any>
   /** Current editor instance */
   editorRef: Editor | null
+
+  // Playback state for subtitles
+  currentSubtitle: string
+  playbackState: PlaybackState
 
   setEditor: (editor: Editor | null) => void
   saveSnapshot: (chatId: string) => void
@@ -21,14 +26,24 @@ interface WhiteboardStore {
   placedMediaIds: string[]  // Track already-placed media to avoid duplicates
   clearPlacedMedia: () => void
   focusOrPlaceMedia: (key: string) => void
+  playScene: (scene: WhiteboardScene, onSpeak: (text: string) => Promise<void>) => void
+  stopPlayback: () => void
 
-  
+   
 }
+
+let currentPlayer: ActionPlayer | null = null
 
 export const useWhiteboardStore = create<WhiteboardStore>((set, get) => ({
   snapshots: {},
   editorRef: null,
   placedMediaIds: [],
+  currentSubtitle: '',
+  playbackState: {
+    isPlaying: false,
+    currentIndex: 0,
+    totalSubtitles: 0,
+  },
 
   setEditor: (editor) => set({ editorRef: editor }),
 
@@ -303,5 +318,86 @@ export const useWhiteboardStore = create<WhiteboardStore>((set, get) => ({
         get().placeScrapedMedia([url], [])
       }
     }
+  },
+
+  playScene: (scene: WhiteboardScene, onSpeak: (text: string) => Promise<void>) => {
+    const { editorRef } = get()
+    if (!editorRef) {
+      console.warn('Cannot play scene: no editor reference')
+      return
+    }
+
+    // Stop any existing playback
+    if (currentPlayer) {
+      currentPlayer.stop()
+      currentPlayer = null
+    }
+
+    // Create ActionPlayer with callbacks
+    const player = new ActionPlayer(scene, {
+      onSubtitle: (text: string) => {
+        set({ currentSubtitle: text })
+      },
+      onPlaybackState: (state: PlaybackState) => {
+        set({ playbackState: state })
+      },
+      onWhiteboardAction: (action: WhiteboardAction) => {
+        const { editorRef: ed } = get()
+        if (!ed) return
+
+        // Execute the whiteboard action
+        if (action.type === 'create_text') {
+          const shapeId = createShapeId(action.id)
+          ed.createShape({
+            id: shapeId,
+            type: 'text',
+            x: action.position.x * 100,  // Scale grid position
+            y: action.position.y * 100,
+            props: {
+              text: action.text,
+              size: action.style === 'heading' ? 'xl' : action.style === 'body' ? 'm' : 'l',
+            },
+          })
+        } else if (action.type === 'create_box') {
+          const shapeId = createShapeId(action.id)
+          ed.createShape({
+            id: shapeId,
+            type: 'geo',
+            x: action.position.x * 100,
+            y: action.position.y * 100,
+            props: {
+              geo: 'rectangle',
+              w: 200,
+              h: 100,
+            },
+          })
+        } else if (action.type === 'highlight') {
+          // Highlight effect - could add a note or visual marker
+          console.log('Highlight action:', action.id)
+        }
+      },
+      onSpeak: onSpeak,
+      onComplete: () => {
+        set({
+          playbackState: { isPlaying: false, currentIndex: 0, totalSubtitles: 0 },
+          currentSubtitle: ''
+        })
+        currentPlayer = null
+      },
+    })
+
+    currentPlayer = player
+    player.play()
+  },
+
+  stopPlayback: () => {
+    if (currentPlayer) {
+      currentPlayer.stop()
+      currentPlayer = null
+    }
+    set({
+      playbackState: { isPlaying: false, currentIndex: 0, totalSubtitles: 0 },
+      currentSubtitle: ''
+    })
   },
 }))
