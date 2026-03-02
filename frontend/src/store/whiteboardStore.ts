@@ -4,6 +4,7 @@ import { createShapeId } from 'tldraw'
 import type { ScenePlan } from '@/components/whiteboard/types'
 import type { WhiteboardScene, WhiteboardAction, PlaybackState } from '@/types/whiteboard-sync'
 import { ActionPlayer } from '@/components/whiteboard/ActionPlayer'
+import { cleanForWhiteboard, cleanForTTS } from '@/utils/textCleaner'
 
 interface WhiteboardStore {
   /** TLDraw snapshots keyed by chatId */
@@ -23,13 +24,11 @@ interface WhiteboardStore {
   presentOnBoard: (scenePlan: ScenePlan) => void
   placeScrapedMedia: (images: string[], videoIds: string[]) => void
   placeYouTubeVideos: (videoIds: string[]) => void
-  placedMediaIds: string[]  // Track already-placed media to avoid duplicates
+  placedMediaIds: string[]
   clearPlacedMedia: () => void
   focusOrPlaceMedia: (key: string) => void
   playScene: (scene: WhiteboardScene, onSpeak: (text: string) => Promise<void>) => void
   stopPlayback: () => void
-
-   
 }
 
 let currentPlayer: ActionPlayer | null = null
@@ -82,7 +81,6 @@ export const useWhiteboardStore = create<WhiteboardStore>((set, get) => ({
     const { editorRef } = get()
     if (!editorRef) return
     try {
-      // Delete all shapes on the current page
       const shapeIds = [...editorRef.getCurrentPageShapeIds()]
       editorRef.store.remove(shapeIds)
     } catch (e) {
@@ -98,7 +96,6 @@ export const useWhiteboardStore = create<WhiteboardStore>((set, get) => ({
       const shapeIds = [...editorRef.getCurrentPageShapeIds()]
       if (shapeIds.length === 0) return null
 
-      // Use tldraw's built-in SVG export, then convert to PNG via canvas
       const svgResult = await editorRef.getSvgString(shapeIds, {
         background: true,
         padding: 20,
@@ -107,7 +104,6 @@ export const useWhiteboardStore = create<WhiteboardStore>((set, get) => ({
 
       const { svg: svgString, width, height } = svgResult
 
-      // Convert SVG string to PNG blob via off-screen canvas
       return new Promise<Blob | null>((resolve) => {
         const img = new Image()
         const svgBlob = new Blob([svgString], { type: 'image/svg+xml;charset=utf-8' })
@@ -115,7 +111,7 @@ export const useWhiteboardStore = create<WhiteboardStore>((set, get) => ({
 
         img.onload = () => {
           const canvas = document.createElement('canvas')
-          const scale = 2 // retina
+          const scale = 2
           canvas.width = width * scale
           canvas.height = height * scale
           const ctx = canvas.getContext('2d')!
@@ -146,7 +142,6 @@ export const useWhiteboardStore = create<WhiteboardStore>((set, get) => ({
     const { snap = false, gridSize = 50 } = scenePlan
     const viewportBounds = editorRef.getViewportScreenBounds()
 
-    // Convert screen bounds to page coordinates
     const topLeft = editorRef.screenToPage({ x: viewportBounds.x, y: viewportBounds.y })
     const bottomRight = editorRef.screenToPage({
       x: viewportBounds.x + viewportBounds.w,
@@ -179,7 +174,6 @@ export const useWhiteboardStore = create<WhiteboardStore>((set, get) => ({
           },
         })
       } else if (el.type === 'image' && el.url) {
-        // Create an image asset + shape
         const assetId = `asset:${el.id}` as any
         editorRef.createAssets([
           {
@@ -207,9 +201,7 @@ export const useWhiteboardStore = create<WhiteboardStore>((set, get) => ({
             h,
           },
         })
-      }
-      // SVG stubbed — treat as image for now
-      else if (el.type === 'svg' && el.url) {
+      } else if (el.type === 'svg' && el.url) {
         console.warn('SVG placement stubbed — treating as image')
       }
     }
@@ -220,7 +212,6 @@ export const useWhiteboardStore = create<WhiteboardStore>((set, get) => ({
     if (!editorRef) return
     if (images.length === 0 && videoIds.length === 0) return
 
-    // Deduplicate per individual URL (not per batch)
     const newImages = images.filter(url => !placedMediaIds.includes(`img-${url}`))
     if (newImages.length === 0) return
 
@@ -234,7 +225,6 @@ export const useWhiteboardStore = create<WhiteboardStore>((set, get) => ({
     const GAP = 16
 
     newImages.slice(0, 6).forEach((src, i) => {
-      // Deterministic IDs so focusOrPlaceMedia can locate the shape later
       const urlKey = encodeURIComponent(src).slice(0, 50)
       const shapeId = createShapeId('img-' + urlKey)
       const assetId = `asset:img-${urlKey}` as any
@@ -279,7 +269,6 @@ export const useWhiteboardStore = create<WhiteboardStore>((set, get) => ({
     const GAP = 20
 
     newIds.forEach((videoId, i) => {
-      // Deterministic ID so focusOrPlaceMedia can locate the shape later
       const shapeId = createShapeId('yt-' + videoId)
       editorRef.createShape({
         id: shapeId,
@@ -305,7 +294,6 @@ export const useWhiteboardStore = create<WhiteboardStore>((set, get) => ({
         editorRef.setSelectedShapes([shapeId])
         editorRef.zoomToSelection()
       } else {
-        // Shape was deleted — allow re-placement then place
         set(s => ({ placedMediaIds: s.placedMediaIds.filter(id => id !== `yt-${videoId}`) }))
         get().placeYouTubeVideos([videoId])
       }
@@ -318,7 +306,6 @@ export const useWhiteboardStore = create<WhiteboardStore>((set, get) => ({
         editorRef.setSelectedShapes([shapeId])
         editorRef.zoomToSelection()
       } else {
-        // Shape was deleted — allow re-placement then place
         set(s => ({ placedMediaIds: s.placedMediaIds.filter(id => id !== `img-${url}`) }))
         get().placeScrapedMedia([url], [])
       }
@@ -350,16 +337,18 @@ export const useWhiteboardStore = create<WhiteboardStore>((set, get) => ({
         const { editorRef: ed } = get()
         if (!ed) return
 
-        // Execute the whiteboard action
+        // Clean action text before placing on board
+        const cleanText = cleanForWhiteboard(action.text)
+
         if (action.type === 'create_text') {
           const shapeId = createShapeId(action.id)
           ed.createShape({
             id: shapeId,
             type: 'text',
-            x: action.position.x * 100,  // Scale grid position
+            x: action.position.x * 100,
             y: action.position.y * 100,
             props: {
-              text: action.text,
+              text: cleanText,
               size: action.style === 'heading' ? 'xl' : action.style === 'body' ? 'm' : 'l',
             },
           })
@@ -377,11 +366,14 @@ export const useWhiteboardStore = create<WhiteboardStore>((set, get) => ({
             },
           })
         } else if (action.type === 'highlight') {
-          // Highlight effect - could add a note or visual marker
           console.log('Highlight action:', action.id)
         }
       },
-      onSpeak: onSpeak,
+      onSpeak: (text: string) => {
+        // Clean text before sending to TTS
+        const cleanText = cleanForTTS(text)
+        return onSpeak(cleanText)
+      },
       onComplete: () => {
         set({
           playbackState: {

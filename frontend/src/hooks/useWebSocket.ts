@@ -3,6 +3,7 @@ import { useEffect, useRef, useCallback } from 'react'
 import { useChatStore } from '@/store/chatStore'
 import { useWhiteboardStore } from '@/store/whiteboardStore'
 import { useUIStore } from '@/store/uiStore'
+import { cleanForTTS } from '@/utils/textCleaner'
 
 const WS_BASE = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000'
 
@@ -86,8 +87,8 @@ export function useWebSocket(clientId: string) {
         return
       }
 
-      // Clean text for TTS
-      const clean = text.replace(/[#*_~`]/g, '').trim()
+      // Clean text for TTS using proper utility
+      const clean = cleanForTTS(text)
       if (!clean) {
         resolve()
         return
@@ -114,7 +115,7 @@ export function useWebSocket(clientId: string) {
             }
             audio.onerror = () => {
               URL.revokeObjectURL(url)
-              resolve()  // Don't reject, just continue
+              resolve()
             }
             audio.play().catch(() => resolve())
           }
@@ -125,7 +126,7 @@ export function useWebSocket(clientId: string) {
 
       ws.addEventListener('message', onMessage)
       
-      // Send TTS request
+      // Send TTS request with cleaned text
       ws.send(JSON.stringify({
         type: 'tts',
         text: clean,

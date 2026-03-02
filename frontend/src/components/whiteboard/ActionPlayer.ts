@@ -2,18 +2,18 @@
  * ActionPlayer — Sequential playback engine for whiteboard scene sync.
  *
  * Flow per subtitle:
- *   1. Split subtitle into words
- *   2. Display words one-by-one with fade transitions
- *   3. Fire matching whiteboard action (TLDraw shape creation)
- *   4. Speak subtitle via TTS
- *   5. Wait for speech to finish OR minimum display duration
- *   6. Advance to next subtitle
+ *   1. Display the full subtitle text (one line at a time)
+ *   2. Fire matching whiteboard action (TLDraw shape creation)
+ *   3. Speak subtitle via TTS
+ *   4. Wait for speech to finish OR minimum display duration
+ *   5. Advance to next subtitle
  */
 
+import { cleanForTTS, cleanForSubtitle } from '@/utils/textCleaner'
 import type { WhiteboardScene, Subtitle, WhiteboardAction, PlaybackState } from '@/types/whiteboard-sync'
 
 export interface ActionPlayerCallbacks {
-  /** Called when current subtitle text changes */
+  /** Called when current subtitle text changes (one line at a time) */
   onSubtitle: (text: string) => void
   /** Called when playback state changes */
   onPlaybackState: (state: PlaybackState) => void
@@ -31,9 +31,6 @@ export class ActionPlayer {
   private currentIndex = 0
   private stopped = false
   private actionMap: Map<string, WhiteboardAction>
-  // Word-level tracking
-  private currentWordIndex = 0
-  private words: string[] = []
 
   constructor(scene: WhiteboardScene, callbacks: ActionPlayerCallbacks) {
     this.scene = scene
@@ -46,12 +43,7 @@ export class ActionPlayer {
     }
   }
 
-  /** Split text into words, preserving punctuation */
-  private splitIntoWords(text: string): string[] {
-    return text.split(/\s+/).filter(w => w.length > 0)
-  }
-
-  /** Start sequential playback */
+  /** Start sequential playback — one subtitle at a time */
   async play(): Promise<void> {
     this.stopped = false
     this.currentIndex = 0
@@ -61,35 +53,50 @@ export class ActionPlayer {
       this.callbacks.onWhiteboardAction({
         id: 'scene-title',
         type: 'create_text',
-        text: this.scene.title,
-        position: { x: 0, y: -1 },  // above the grid
+        text: cleanForSubtitle(this.scene.title),
+        position: { x: 0, y: -1 },
         style: 'heading',
       })
     }
 
-    // Use full clean_response for word-by-word display if available
-    const fullText = this.scene.clean_response || this.scene.subtitles.map(s => s.text).join(' ')
-    this.words = this.splitIntoWords(fullText)
-    this.currentWordIndex = 0
+    // Fire any whiteboard actions that don't have matching subtitles
+    // (e.g., milestone listing placed at scene start)
+    const markedActionIds = new Set(
+      this.scene.subtitles
+        .filter(s => s.marker)
+        .map(s => s.marker!)
+    )
+    for (const action of this.scene.whiteboard.actions) {
+      if (!markedActionIds.has(action.id)) {
+        this.callbacks.onWhiteboardAction(action)
+      }
+    }
 
-    // Update playback state with word info for the full text
-    this.callbacks.onPlaybackState({
-      isPlaying: true,
-      currentIndex: 0,
-      totalSubtitles: this.scene.subtitles.length,
-      currentWordIndex: 0,
-      totalWords: this.words.length,
-      currentWord: this.words[0] || '',
-      visibleWords: [],
-      isFading: false,
-    })
+    // Small pause to let initial shapes render
+    if (!this.stopped) await this.delay(400)
 
-    // Play each subtitle to trigger whiteboard actions
+    // Play each subtitle one at a time
     for (let i = 0; i < this.scene.subtitles.length; i++) {
       if (this.stopped) break
 
       this.currentIndex = i
       const subtitle = this.scene.subtitles[i]
+      const cleanText = cleanForSubtitle(subtitle.text)
+
+      // Update playback state
+      this.callbacks.onPlaybackState({
+        isPlaying: true,
+        currentIndex: i,
+        totalSubtitles: this.scene.subtitles.length,
+        currentWordIndex: 0,
+        totalWords: 0,
+        currentWord: '',
+        visibleWords: [],
+        isFading: false,
+      })
+
+      // Show the full subtitle line
+      this.callbacks.onSubtitle(cleanText)
 
       // Fire matching whiteboard action
       if (subtitle.marker) {
@@ -99,15 +106,30 @@ export class ActionPlayer {
         }
       }
 
-      // Small pause between whiteboard actions
+      // Speak the subtitle and wait for completion
+      if (!this.stopped && cleanText) {
+        const cleanTTS = cleanForTTS(subtitle.text)
+        // Minimum display time of 2s even if TTS finishes faster
+        const minDisplayPromise = this.delay(2000)
+        const speakPromise = this.callbacks.onSpeak(cleanTTS).catch(() => {})
+        await Promise.all([minDisplayPromise, speakPromise])
+      }
+
+      // Brief pause between subtitles for visual breathing room
       if (!this.stopped && i < this.scene.subtitles.length - 1) {
+        // Fade out current subtitle
+        this.callbacks.onPlaybackState({
+          isPlaying: true,
+          currentIndex: i,
+          totalSubtitles: this.scene.subtitles.length,
+          currentWordIndex: 0,
+          totalWords: 0,
+          currentWord: '',
+          visibleWords: [],
+          isFading: true,
+        })
         await this.delay(300)
       }
-    }
-
-    // Now speak the full text with word-by-word display
-    if (!this.stopped && this.words.length > 0) {
-      await this.speakWithWordDisplay(fullText)
     }
 
     // Done
@@ -125,62 +147,6 @@ export class ActionPlayer {
       })
       this.callbacks.onComplete()
     }
-  }
-
-  /** Speak text while displaying words one-by-one with fade transitions */
-  private async speakWithWordDisplay(text: string): Promise<void> {
-    const words = this.splitIntoWords(text)
-    if (words.length === 0) return
-
-    // Calculate timing based on word count and typical speech rate
-    // Average speech rate is ~150 words per minute = 400ms per word
-    const wordDisplayDuration = 400 // ms per word
-    
-    // Start TTS in the background
-    const ttsPromise = this.callbacks.onSpeak(text).catch(() => {})
-    
-    // Display words one by one while TTS plays
-    for (let i = 0; i < words.length; i++) {
-      if (this.stopped) break
-
-      const word = words[i]
-      const visibleSoFar = words.slice(0, i + 1)
-      
-      // Trigger fade out for previous word
-      this.callbacks.onPlaybackState({
-        isPlaying: true,
-        currentIndex: this.currentIndex,
-        totalSubtitles: this.scene.subtitles.length,
-        currentWordIndex: i,
-        totalWords: words.length,
-        currentWord: word,
-        visibleWords: visibleSoFar,
-        isFading: i > 0, // fade when transitioning
-      })
-      
-      // Update subtitle display
-      this.callbacks.onSubtitle(visibleSoFar.join(' '))
-
-      // Wait for word display duration
-      await this.delay(wordDisplayDuration)
-      
-      // Clear fade state
-      if (!this.stopped) {
-        this.callbacks.onPlaybackState({
-          isPlaying: true,
-          currentIndex: this.currentIndex,
-          totalSubtitles: this.scene.subtitles.length,
-          currentWordIndex: i,
-          totalWords: words.length,
-          currentWord: word,
-          visibleWords: visibleSoFar,
-          isFading: false,
-        })
-      }
-    }
-    
-    // Wait for TTS to finish (in case it's still playing)
-    await ttsPromise
   }
 
   /** Stop playback */
@@ -202,7 +168,6 @@ export class ActionPlayer {
   private delay(ms: number): Promise<void> {
     return new Promise((resolve) => {
       const timer = setTimeout(resolve, ms)
-      // Check stopped state periodically
       const check = setInterval(() => {
         if (this.stopped) {
           clearTimeout(timer)

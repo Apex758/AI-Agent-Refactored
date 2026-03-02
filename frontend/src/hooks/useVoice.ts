@@ -1,5 +1,6 @@
 'use client'
 import { useCallback, useRef, useState, useEffect } from 'react'
+import { cleanForTTS } from '@/utils/textCleaner'
 
 export interface UseVoiceReturn {
   isListening: boolean
@@ -24,7 +25,6 @@ export function useVoice(onFinalTranscript: (text: string) => void): UseVoiceRet
   const wsRef       = useRef<WebSocket | null>(null)
   const audioRef    = useRef<HTMLAudioElement | null>(null)
 
-  // Keep callback ref fresh so startListening closure never goes stale
   useEffect(() => { callbackRef.current = onFinalTranscript }, [onFinalTranscript])
 
   useEffect(() => {
@@ -35,12 +35,10 @@ export function useVoice(onFinalTranscript: (text: string) => void): UseVoiceRet
   }, [])
 
   // Initialize WebSocket connection for server-side TTS
-  // Only connect if a WS URL is explicitly configured — avoids flood of
-  // connection errors in dev when the backend is not running.
   useEffect(() => {
     if (typeof window === 'undefined') return
     const wsUrl = process.env.NEXT_PUBLIC_WS_URL
-    if (!wsUrl) return   // no URL → skip WS, browser SpeechSynthesis used as fallback
+    if (!wsUrl) return
 
     const ws = new WebSocket(`${wsUrl}/webrtc`)
     
@@ -52,7 +50,6 @@ export function useVoice(onFinalTranscript: (text: string) => void): UseVoiceRet
       const message = JSON.parse(event.data)
       
       if (message.type === 'tts_audio') {
-        // Decode base64 audio and play
         const audioBytes = Uint8Array.from(atob(message.audio), c => c.charCodeAt(0))
         const blob = new Blob([audioBytes], { type: 'audio/wav' })
         const url = URL.createObjectURL(blob)
@@ -99,26 +96,17 @@ export function useVoice(onFinalTranscript: (text: string) => void): UseVoiceRet
   // ── TTS ──────────────────────────────────────────────────────────
 
   const stopSpeaking = useCallback(() => {
-    // Stop server-side TTS
     if (audioRef.current) {
       audioRef.current.pause()
       audioRef.current = null
     }
-    // Stop browser TTS as fallback
     synthRef.current?.cancel()
     setIsSpeaking(false)
   }, [])
 
   const speak = useCallback((text: string) => {
-    // Strip markdown-ish symbols that sound bad when spoken
-    const clean = text
-      .replace(/```[\s\S]*?```/g, 'code block')
-      .replace(/`[^`]+`/g, '')
-      .replace(/\*\*/g, '')
-      .replace(/#{1,6}\s/g, '')
-      .replace(/https?:\/\/\S+/g, 'link')
-      .trim()
-
+    // Use the proper text cleaner utility
+    const clean = cleanForTTS(text)
     if (!clean) return
 
     // Try server-side TTS first
@@ -164,7 +152,6 @@ export function useVoice(onFinalTranscript: (text: string) => void): UseVoiceRet
     const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
     if (!SR) return
 
-    // Interrupt TTS so user can speak immediately
     stopSpeaking()
 
     const rec = new SR()

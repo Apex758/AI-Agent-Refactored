@@ -30,6 +30,8 @@ from app.milestones.milestone_store import (
     MilestoneStatus,
 )
 from app.api.whiteboard_types import WhiteboardScene
+from app.utils.text_cleaner import clean_for_tts, clean_for_whiteboard, clean_for_subtitle
+
 
 class Gateway:
     def __init__(self):
@@ -70,9 +72,6 @@ class Gateway:
         """
         logger.info(f"[{channel}:{client_id}] Processing: {message[:80]}...")
 
-        # Auto-create milestones if learning intent detected (DISABLED — agent now calls create_learning_plan tool)
-        # await maybe_create_milestones(client_id, message)
-
         self.memory.save_message(client_id, "user", message)
         memory_context = await self.memory.auto_recall(message)
         history = self.memory.get_history(client_id, limit=20)
@@ -109,9 +108,6 @@ class Gateway:
         """
         self.memory.save_message(client_id, "user", message)
 
-        # Auto-create milestones if learning intent detected (DISABLED — agent now calls create_learning_plan tool)
-        # await maybe_create_milestones(client_id, message)
-
         memory_context = await self.memory.auto_recall(message)
         history = self.memory.get_history(client_id, limit=20)
         messages = [{"role": h["role"], "content": h["content"]} for h in history]
@@ -143,75 +139,126 @@ class Gateway:
         asyncio.create_task(self.memory.auto_capture(message, full_response, client_id))
 
 
-    async def process_teaching(self, full_response: str, user_message: str) -> Optional[Dict]:
-            """
-            Post-process an LLM response into a structured whiteboard scene.
-            Returns a dict matching WhiteboardScene schema, or None if parsing fails.
-            """
-            prompt = (
-                "You are a whiteboard layout engine. Given a tutoring explanation, "
-                "convert it into a structured JSON whiteboard scene.\n\n"
-                "Rules:\n"
-                "- Split the explanation into 3-8 short spoken phrases (subtitles)\n"
-                "- Each subtitle should be ONE sentence, spoken naturally\n"
-                "- For each subtitle that introduces a math step or key fact, "
-                "create a matching whiteboard action\n"
-                "- Whiteboard shows ONLY math/work (short). Subtitles handle explanations.\n"
-                "- Position: x=column (usually 0), y=row (0,1,2...)\n"
-                "- Style: 'heading' for step labels, 'body' for work, 'result' for final answer\n"
-                "- The marker field in a subtitle must match an action id exactly\n"
-                "- Not every subtitle needs a marker — explanatory phrases can have marker: null\n\n"
-                "Return ONLY valid JSON (no markdown fences, no preamble):\n"
-                "{\n"
-                '  "title": "short topic title",\n'
-                '  "clean_response": "full explanation as readable text",\n'
-                '  "subtitles": [\n'
-                '    {"id": "sub-1", "text": "spoken phrase", "marker": "step-1"},\n'
-                '    {"id": "sub-2", "text": "explanation only", "marker": null}\n'
-                "  ],\n"
-                '  "whiteboard": {\n'
-                '    "actions": [\n'
-                '      {"id": "step-1", "type": "create_text", "text": "board text", '
-                '"position": {"x": 0, "y": 0}, "style": "heading"}\n'
-                "    ]\n"
-                "  }\n"
-                "}\n\n"
-                f"User question: {user_message[:300]}\n\n"
-                f"Tutor explanation:\n{full_response[:3000]}"
-            )
+    async def process_teaching(self, full_response: str, user_message: str, chat_id: str = "") -> Optional[Dict]:
+        """
+        Post-process an LLM response into a structured whiteboard scene.
+        Returns a dict matching WhiteboardScene schema, or None if parsing fails.
 
+        - Cleans text for TTS and whiteboard
+        - Generates one-line subtitles (shown one at a time)
+        - Includes milestone listing as initial whiteboard actions
+        """
+        # Clean the response for scene generation
+        cleaned_response = clean_for_whiteboard(full_response)
+
+        # Fetch milestones for this chat to include on whiteboard
+        milestone_section = ""
+        if chat_id:
             try:
-                result = await self.llm.generate(
-                    messages=[{"role": "user", "content": prompt}],
-                    system_prompt=(
-                        "You convert tutoring explanations into structured whiteboard JSON. "
-                        "Return ONLY valid JSON."
-                    ),
-                )
-                content = result.get("content", "")
-
-                # Strip markdown fences
-                if "```" in content:
-                    content = content.split("```")[1]
-                    if content.startswith("json"):
-                        content = content[4:]
-                    content = content.strip()
-
-                if "{" in content:
-                    json_str = content[content.index("{"):content.rindex("}") + 1]
-                    scene = json.loads(json_str)
-
-                    if "subtitles" in scene and "whiteboard" in scene:
-                        if not scene.get("title"):
-                            scene["title"] = user_message[:60]
-                        if not scene.get("clean_response"):
-                            scene["clean_response"] = full_response
-                        return scene
-
+                store = get_milestone_store()
+                plans = store.list_plans_for_chat(chat_id)
+                if plans:
+                    plan = plans[0]
+                    milestone_lines = []
+                    for m in plan.milestones:
+                        status_label = {
+                            "mastered": "Done",
+                            "in_progress": "Current",
+                            "available": "Next",
+                            "locked": "Locked",
+                        }.get(m.status.value, "")
+                        milestone_lines.append(f"{m.order}. {m.title} [{status_label}]")
+                    milestone_section = (
+                        f"\n\nActive learning plan for '{plan.topic}':\n"
+                        + "\n".join(milestone_lines)
+                        + "\n\nInclude the milestone list as the FIRST whiteboard actions "
+                        "(one create_text per milestone, positioned at x=0, y=0 through y=N). "
+                        "Use style 'heading' for the topic title and 'body' for each milestone."
+                    )
             except Exception as e:
-                logger.warning(f"Teaching scene generation failed: {e}")
+                logger.warning(f"Failed to fetch milestones for whiteboard: {e}")
 
-            return None
+        prompt = (
+            "You are a whiteboard layout engine. Given a tutoring explanation, "
+            "convert it into a structured JSON whiteboard scene.\n\n"
+            "Rules:\n"
+            "- Split the explanation into 3-8 subtitles. Each subtitle is ONE complete sentence shown alone on screen.\n"
+            "- Subtitles will be displayed ONE AT A TIME (not word by word). Keep each concise and self-contained.\n"
+            "- For each subtitle that introduces a key concept, create a matching whiteboard action.\n"
+            "- Whiteboard shows ONLY short labels and key facts. Subtitles handle the spoken explanations.\n"
+            "- ALL text must be CLEAN: no markdown (no **, ##, `, ---), no emoji, no special symbols.\n"
+            "- Write plain English sentences suitable for text-to-speech.\n"
+            "- Position: x=column (usually 0), y=row (0,1,2...)\n"
+            "- Style: 'heading' for titles/labels, 'body' for content, 'result' for answers\n"
+            "- The marker field in a subtitle must match an action id exactly\n"
+            "- Not every subtitle needs a marker. Explanatory phrases can have marker: null\n"
+            f"{milestone_section}\n\n"
+            "Return ONLY valid JSON (no markdown fences, no preamble):\n"
+            "{\n"
+            '  "title": "short topic title",\n'
+            '  "clean_response": "full explanation as clean readable text for TTS (no markdown, no emoji)",\n'
+            '  "subtitles": [\n'
+            '    {"id": "sub-1", "text": "One complete sentence shown on screen", "marker": "step-1"},\n'
+            '    {"id": "sub-2", "text": "Another sentence, no marker needed", "marker": null}\n'
+            "  ],\n"
+            '  "whiteboard": {\n'
+            '    "actions": [\n'
+            '      {"id": "step-1", "type": "create_text", "text": "Short board text", '
+            '"position": {"x": 0, "y": 0}, "style": "heading"}\n'
+            "    ]\n"
+            "  }\n"
+            "}\n\n"
+            f"User question: {user_message[:300]}\n\n"
+            f"Tutor explanation:\n{cleaned_response[:3000]}"
+        )
+
+        try:
+            result = await self.llm.generate(
+                messages=[{"role": "user", "content": prompt}],
+                system_prompt=(
+                    "You convert tutoring explanations into structured whiteboard JSON. "
+                    "ALL text must be clean plain English with NO markdown, NO emoji, NO special formatting. "
+                    "Return ONLY valid JSON."
+                ),
+            )
+            content = result.get("content", "")
+
+            # Strip markdown fences
+            if "```" in content:
+                content = content.split("```")[1]
+                if content.startswith("json"):
+                    content = content[4:]
+                content = content.strip()
+
+            if "{" in content:
+                json_str = content[content.index("{"):content.rindex("}") + 1]
+                scene = json.loads(json_str)
+
+                if "subtitles" in scene and "whiteboard" in scene:
+                    if not scene.get("title"):
+                        scene["title"] = clean_for_whiteboard(user_message[:60])
+                    else:
+                        scene["title"] = clean_for_whiteboard(scene["title"])
+
+                    if not scene.get("clean_response"):
+                        scene["clean_response"] = clean_for_tts(full_response)
+                    else:
+                        scene["clean_response"] = clean_for_tts(scene["clean_response"])
+
+                    # Clean all subtitle text for TTS
+                    for sub in scene.get("subtitles", []):
+                        sub["text"] = clean_for_subtitle(sub.get("text", ""))
+
+                    # Clean all whiteboard action text
+                    for action in scene.get("whiteboard", {}).get("actions", []):
+                        action["text"] = clean_for_whiteboard(action.get("text", ""))
+
+                    return scene
+
+        except Exception as e:
+            logger.warning(f"Teaching scene generation failed: {e}")
+
+        return None
         
         
     async def _agent_loop_with_media(
