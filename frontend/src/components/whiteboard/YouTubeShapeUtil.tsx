@@ -74,7 +74,7 @@ function YouTubeShapeComponent({
         }}
       >
         <span style={{ color: '#fff', fontWeight: 700, fontSize: 13, letterSpacing: 0.3 }}>
-          ▶ YouTube
+          <Icon name="play" size={14} /> YouTube
         </span>
         <button
           onPointerDown={handleClose}
@@ -96,7 +96,7 @@ function YouTubeShapeComponent({
             pointerEvents: 'all',
           }}
         >
-          ✕
+          <Icon name="close" size={12} />
         </button>
       </div>
 
@@ -157,7 +157,7 @@ function YouTubeShapeComponent({
                 boxShadow: '0 2px 12px rgba(0,0,0,0.5)',
               }}
             >
-              <span style={{ color: '#fff', fontSize: 24, lineHeight: 1, marginLeft: 4 }}>▶</span>
+              <Icon name="play" size={24} color="#fff" />
             </div>
           </div>
         )}

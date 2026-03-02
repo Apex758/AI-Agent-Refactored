@@ -89,7 +89,7 @@ export default function LazyYouTubeEmbed({ ytId }: LazyYouTubeEmbedProps) {
                 fontSize: 12,
               }}
             >
-              <span style={{ fontSize: 28 }}>📹</span>
+              <Icon name="video" size={28} />
               YouTube video
             </span>
           )}

@@ -1,6 +1,7 @@
 'use client'
 
 import type { UseVoiceReturn } from '@/hooks/useVoice'
+import Icon from '@/components/Icon'
 
 interface FloatingMicProps {
   voice: UseVoiceReturn
@@ -44,7 +45,7 @@ export default function FloatingMic({ voice, isProcessing, onMicClick }: Floatin
             : '0 4px 16px rgba(42,26,16,.25)',
       }}
     >
-      {voice.isListening ? '⏹' : voice.isSpeaking ? '🔊' : '🎙️'}
+      {voice.isListening ? <Icon name="stop" size={18} /> : voice.isSpeaking ? <Icon name="speaker" size={18} /> : <Icon name="microphone" size={18} />}
     </button>
   )
 }

@@ -4,6 +4,7 @@ import dynamic from 'next/dynamic'
 import { useCallback, useState } from 'react'
 import { useWhiteboardStore } from '@/store/whiteboardStore'
 import { useChatStore } from '@/store/chatStore'
+import Icon from '@/components/Icon'
 
 const Whiteboard = dynamic(() => import('./Whiteboard'), {
   ssr: false,
@@ -39,7 +40,7 @@ export default function WhiteboardLayer({ chatId, onAfterSnapshot }: WhiteboardL
         const msg = {
           id: Math.random().toString(36).slice(2, 12),
           role: 'user' as const,
-          content: '📸 Whiteboard snapshot',
+          content: 'Whiteboard snapshot',
           timestamp: Date.now(),
           citations: [],
           attachment: {
@@ -76,7 +77,7 @@ export default function WhiteboardLayer({ chatId, onAfterSnapshot }: WhiteboardL
         }}
         title="Send board snapshot to chat"
       >
-        📸 {exporting ? 'Exporting…' : 'Send to Chat'}
+        <Icon name="camera" size={14} /> {exporting ? 'Exporting…' : 'Send to Chat'}
       </button>
     </div>
   )

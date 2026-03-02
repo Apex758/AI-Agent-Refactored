@@ -6,6 +6,9 @@
 
 ## Important Facts
 
+- User wants to see a video of a duck
+
+
 - User is interested in sleepy cats.
 
 

@@ -8,6 +8,7 @@ import { useWebSocket } from '@/hooks/useWebSocket'
 import { useVoice } from '@/hooks/useVoice'
 import CenterStage from '@/components/CenterStage'
 import LazyYouTubeEmbed from '@/components/LazyYouTubeEmbed'
+import Icon from '@/components/Icon'
 import type { Document, Citation, ScrapedMedia } from '@/types'
 
 // ── YouTube embed helper ──────────────────────────────────────────
@@ -116,7 +117,7 @@ function CitationBadge({ citation }: { citation: Citation }) {
       className={isCross ? 'citation-badge citation-badge-cross' : 'citation-badge'}
       title={isCross ? 'From another chat' : 'From this chat'}
     >
-      📄{' '}
+      <Icon name="file-text" size={14} />{' '}
       <span className="truncate max-w-[120px] inline-block align-bottom">{citation.filename}</span>
       {citation.page > 1 && <span style={{ opacity: 0.6 }}> p.{citation.page}</span>}
       {isCross && <span style={{ opacity: 0.55, fontSize: 10 }}> ↗</span>}
@@ -139,7 +140,7 @@ function MediaCard({ media }: { media: ScrapedMedia }) {
       }}
     >
       <p className="text-xs font-semibold mb-2" style={{ color: 'var(--vegas-gold)', letterSpacing: '0.08em' }}>
-        🌐 Scraped Media
+        <Icon name="globe" size={14} /> Scraped Media
       </p>
 
       {hasImages && (
@@ -212,7 +213,7 @@ function DocumentPanel({
           onClick={() => fileInputRef.current?.click()}
           className={`drop-zone${isDragging ? ' dragging' : ''} flex flex-col items-center justify-center py-4 gap-1`}
         >
-          <span className="text-xl">{isDragging ? '📂' : '📎'}</span>
+          <span className="text-xl">{isDragging ? <Icon name="folder-open" size={20} /> : <Icon name="paperclip" size={20} />}</span>
           <p className="text-xs text-center px-2" style={{ color: 'rgba(245,240,235,.5)' }}>
             {isDragging ? 'Drop to upload' : 'Drop files or click'}
           </p>
@@ -256,7 +257,7 @@ function DocumentPanel({
               style={{ color: 'rgba(245,240,235,.5)' }}
               title="Delete"
             >
-              ✕
+              <Icon name="close" size={14} />
             </button>
           </div>
         ))}
@@ -291,7 +292,7 @@ function VoiceOrb({ isListening, isSpeaking }: { isListening: boolean; isSpeakin
             boxShadow: isListening ? '0 0 20px rgba(220,60,60,.5)' : '0 0 20px rgba(196,178,94,.4)',
           }}
         >
-          {isListening ? '🎙️' : '🔊'}
+          {isListening ? <Icon name="microphone" size={18} /> : <Icon name="speaker" size={18} />}
         </div>
       </div>
       <p
@@ -367,7 +368,7 @@ function BoardLinkChips({
             cursor: 'pointer',
           }}
         >
-          📌 {chip.label}
+          <Icon name="pin" size={14} /> {chip.label}
         </button>
       ))}
     </div>
@@ -572,7 +573,7 @@ export default function Home() {
         onClick={e => { e.stopPropagation(); setSidebarOpen(o => !o) }}
         className="btn-outline w-8 h-8 flex items-center justify-center text-sm"
         title="Toggle sidebar"
-      >☰</button>
+      ><Icon name="menu" size={18} /></button>
       <span
         className="text-sm font-medium truncate max-w-xs"
         style={{ color: 'var(--text-secondary)' }}
@@ -612,7 +613,7 @@ export default function Home() {
         }}
         title="Toggle documents"
       >
-        📎
+        <Icon name="paperclip" size={18} />
         {currentDocuments.length > 0 && (
           <span
             className="text-white rounded-full w-4 h-4 flex items-center justify-center"
@@ -723,14 +724,14 @@ export default function Home() {
                         style={{ color: 'rgba(245,240,235,.6)' }}
                         onMouseEnter={e => (e.currentTarget.style.background = 'rgba(255,255,255,.15)')}
                         onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
-                      >✎</button>
+                      ><Icon name="edit" size={14} /></button>
                       <button
                         onClick={e => { e.stopPropagation(); deleteChat(chat.id) }}
                         className="w-5 h-5 flex items-center justify-center rounded text-xs"
                         style={{ color: 'rgba(255,120,100,.7)' }}
                         onMouseEnter={e => (e.currentTarget.style.background = 'rgba(255,100,80,.15)')}
                         onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
-                      >✕</button>
+                      ><Icon name="close" size={14} /></button>
                     </div>
                   </>
                 )}
@@ -927,7 +928,7 @@ export default function Home() {
                         : 'none',
                     }}
                   >
-                    {voice.isListening ? '⏹' : voice.isSpeaking ? '🔊' : '🎙️'}
+                    {voice.isListening ? <Icon name="stop" size={18} /> : voice.isSpeaking ? <Icon name="speaker" size={18} /> : <Icon name="microphone" size={18} />}
                   </button>
                 )}
 
@@ -947,7 +948,7 @@ export default function Home() {
                       color: voiceEnabled ? 'var(--seal-brown)' : 'var(--text-muted)',
                     }}
                   >
-                    {voiceEnabled ? '🔈' : '🔇'}
+                    {voiceEnabled ? <Icon name="speaker-low" size={18} /> : <Icon name="speaker-mute" size={18} />}
                   </button>
                 )}
 
@@ -996,7 +997,7 @@ export default function Home() {
               <button
                 onClick={() => setShowMemory(false)}
                 className="btn-outline w-8 h-8 flex items-center justify-center text-sm"
-              >✕</button>
+              ><Icon name="close" size={14} /></button>
             </div>
             <pre
               className="text-sm leading-relaxed whitespace-pre-wrap font-mono"

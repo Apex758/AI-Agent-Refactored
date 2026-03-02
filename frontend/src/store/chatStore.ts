@@ -195,7 +195,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     const msg: Message = {
       id: genId(),
       role: 'system',
-      content: '🌐 Scraped media from page',
+      content: 'Scraped media from page',
       timestamp: Date.now(),
       citations: [],
       media: { images, videos },

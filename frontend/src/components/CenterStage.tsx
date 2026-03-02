@@ -5,6 +5,7 @@ import { useUIStore } from '@/store/uiStore'
 import { useWhiteboardStore } from '@/store/whiteboardStore'
 import WhiteboardLayer from '@/components/whiteboard/WhiteboardLayer'
 import FloatingMic from '@/components/FloatingMic'
+import Icon from '@/components/Icon'
 import type { UseVoiceReturn } from '@/hooks/useVoice'
 import type { UIMode } from '@/components/whiteboard/types'
 
@@ -38,7 +39,7 @@ function ModeToggle({ mode, setMode }: { mode: UIMode; setMode: (m: UIMode) => v
             color: mode === m ? 'var(--text-inverse)' : 'var(--text-secondary)',
           }}
         >
-          {m === 'chat' ? '💬 Chat' : '🎨 Board'}
+          {m === 'chat' ? <><Icon name="chat" size={14} /> Chat</> : <><Icon name="palette" size={14} /> Board</>}
         </button>
       ))}
     </div>
