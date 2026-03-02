@@ -6,6 +6,12 @@
 
 ## Important Facts
 
+- User wants to learn simple addition
+
+
+- User wants to learn about the water cycle
+
+
 - User wants to learn about the water cycle
 
 

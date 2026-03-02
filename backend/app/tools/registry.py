@@ -129,7 +129,6 @@ class ToolRegistry:
             handler=self._memory_get,
         ))
 
-        # ── Cross-chat search ──
         self.register(Tool(
             name="search_all_chats",
             description=(
@@ -151,6 +150,22 @@ class ToolRegistry:
                 "chat_id": {"type": "string", "description": "The chat ID to retrieve memory for"},
             }, "required": ["chat_id"]},
             handler=self._get_chat_memory,
+        ))
+
+        # ── Milestone auto-assessment tool ──
+        self.register(Tool(
+            name="milestone_check",
+            description=(
+                "Record whether the student answered correctly on the current milestone. "
+                "Call this after every student reply during a learning session. "
+                "Pass correct=true if they demonstrated understanding, correct=false if not. "
+                "The system will automatically advance the milestone when mastery is achieved."
+            ),
+            parameters={"type": "object", "properties": {
+                "chat_id": {"type": "string", "description": "The current chat/session ID"},
+                "correct": {"type": "boolean", "description": "True if the student answered correctly"},
+            }, "required": ["chat_id", "correct"]},
+            handler=self._milestone_check,
         ))
 
     # ── Handlers ─────────────────────────────────────────────────────
@@ -185,7 +200,6 @@ class ToolRegistry:
         YT_RE = _re.compile(
             r'(?:youtube\.com/watch\?v=|youtu\.be/|youtube\.com/embed/)([a-zA-Z0-9_-]{11})'
         )
-        # Patterns that indicate tracking/icon images to skip
         SKIP_PATTERNS = ('pixel', 'tracking', 'analytics', 'beacon', 'data:', 'base64',
                          '.ico', 'favicon', 'logo', '1x1', 'blank')
 
@@ -197,11 +211,9 @@ class ToolRegistry:
                     from bs4 import BeautifulSoup
                     soup = BeautifulSoup(resp.text, "html.parser")
 
-                    # ── Extract images ──────────────────────────────
                     images: list = []
                     for img in soup.find_all("img", src=True):
                         src: str = img["src"].strip()
-                        # Make absolute
                         if src.startswith("//"):
                             src = "https:" + src
                         elif src.startswith("/"):
@@ -210,7 +222,6 @@ class ToolRegistry:
                             src = f"{parsed.scheme}://{parsed.netloc}{src}"
                         if not src.startswith("http"):
                             continue
-                        # Skip tiny/tracking images
                         sl = src.lower()
                         if any(p in sl for p in SKIP_PATTERNS):
                             continue
@@ -219,7 +230,6 @@ class ToolRegistry:
                         if len(images) >= 6:
                             break
 
-                    # ── Extract YouTube video IDs ───────────────────
                     videos: list = []
                     for tag in soup.find_all(["a", "iframe"], href=True if True else False):
                         href = tag.get("href") or tag.get("src") or ""
@@ -228,7 +238,6 @@ class ToolRegistry:
                             videos.append(m.group(1))
                         if len(videos) >= 4:
                             break
-                    # Also scan raw HTML for YouTube IDs
                     if len(videos) < 4:
                         for m in YT_RE.finditer(resp.text):
                             vid = m.group(1)
@@ -237,7 +246,6 @@ class ToolRegistry:
                             if len(videos) >= 4:
                                 break
 
-                    # ── Extract text ────────────────────────────────
                     for s in soup(["script", "style"]):
                         s.decompose()
                     text = soup.get_text(separator="\n", strip=True)[:5000]
@@ -319,6 +327,47 @@ class ToolRegistry:
         if not content:
             return {"error": f"No memory found for chat {chat_id}"}
         return {"chat_id": chat_id, "content": content}
+
+    async def _milestone_check(self, chat_id: str, correct: bool) -> Dict:
+        """
+        Record a check on the current milestone for the given chat.
+        Automatically advances if mastery threshold is met.
+        """
+        try:
+            from app.milestones.milestone_store import get_milestone_store
+            store = get_milestone_store()
+            plans = store.list_plans_for_chat(chat_id)
+            if not plans:
+                return {"message": "No active milestone plan found for this chat."}
+
+            # Use the most recent in-progress plan
+            plan = plans[0]
+            current = plan.current_milestone()
+            if not current:
+                return {"message": "All milestones already mastered!", "plan_id": plan.plan_id}
+
+            current.record_check(correct)
+            advanced = False
+            if current.check_mastery():
+                plan.advance()
+                advanced = True
+
+            store.save_plan(plan)
+
+            next_milestone = plan.current_milestone()
+            return {
+                "plan_id": plan.plan_id,
+                "topic": plan.topic,
+                "checked_milestone": current.title,
+                "correct": correct,
+                "advanced": advanced,
+                "next_milestone": next_milestone.title if next_milestone else None,
+                "progress_pct": round(plan.progress * 100),
+                "all_mastered": plan.progress >= 1.0,
+            }
+        except Exception as e:
+            logger.error(f"milestone_check failed: {e}")
+            return {"error": str(e)}
 
 
 # Singleton
