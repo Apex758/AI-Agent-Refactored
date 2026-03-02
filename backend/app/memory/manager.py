@@ -413,7 +413,7 @@ class MemoryManager:
         if not path.exists():
             path.write_text(f"# Daily Log — {d.isoformat()}\n\n")
         timestamp = datetime.now().strftime("%H:%M")
-        with open(path, "a") as f:
+        with open(path, "a", encoding="utf-8") as f:
             f.write(f"\n### {timestamp}\n\n{entry}\n")
         self._index_file(str(path))
 

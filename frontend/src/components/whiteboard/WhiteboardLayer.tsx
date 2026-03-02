@@ -4,6 +4,7 @@ import dynamic from 'next/dynamic'
 import { useCallback, useState } from 'react'
 import { useWhiteboardStore } from '@/store/whiteboardStore'
 import { useChatStore } from '@/store/chatStore'
+import MilestoneBar from '@/components/whiteboard/MilestoneBar'
 import Icon from '@/components/Icon'
 
 const Whiteboard = dynamic(() => import('./Whiteboard'), {
@@ -17,7 +18,7 @@ const Whiteboard = dynamic(() => import('./Whiteboard'), {
 
 interface WhiteboardLayerProps {
   chatId: string
-  onAfterSnapshot?: () => void  // FIX 1: callback to trigger agent after snapshot
+  onAfterSnapshot?: () => void
 }
 
 export default function WhiteboardLayer({ chatId, onAfterSnapshot }: WhiteboardLayerProps) {
@@ -50,7 +51,6 @@ export default function WhiteboardLayer({ chatId, onAfterSnapshot }: WhiteboardL
           },
         }
         addMessage(msg)
-        // FIX 1: trigger agent to respond after image is in chat
         onAfterSnapshot?.()
       }
       reader.readAsDataURL(blob)
@@ -65,6 +65,7 @@ export default function WhiteboardLayer({ chatId, onAfterSnapshot }: WhiteboardL
     <div style={{ position: 'absolute', inset: 0 }}>
       <Whiteboard chatId={chatId} />
 
+      {/* Snapshot button */}
       <button
         onClick={handleSnapshot}
         disabled={exporting}
@@ -74,11 +75,16 @@ export default function WhiteboardLayer({ chatId, onAfterSnapshot }: WhiteboardL
           color: 'var(--text-inverse)',
           boxShadow: '0 4px 16px rgba(42,26,16,.35)',
           opacity: exporting ? 0.6 : 1,
+          /* Shift left so it doesn't overlap the milestone bar */
+          right: 52,
         }}
         title="Send board snapshot to chat"
       >
         <Icon name="camera" size={14} /> {exporting ? 'Exporting…' : 'Send to Chat'}
       </button>
+
+      {/* Milestone progress bar — bottom right */}
+      <MilestoneBar chatId={chatId} />
     </div>
   )
 }

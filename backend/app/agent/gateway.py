@@ -14,6 +14,8 @@ Flow:
 import asyncio
 import json
 import os
+import re
+import uuid
 from typing import Dict, List, Optional, AsyncGenerator, Tuple
 
 from app.core.config import settings
@@ -21,6 +23,12 @@ from app.core.logging import logger
 from app.core.llm import get_llm
 from app.memory.manager import get_memory
 from app.tools.registry import get_tool_registry
+from app.milestones.milestone_store import (
+    get_milestone_store,
+    MilestonePlan,
+    Milestone,
+    MilestoneStatus,
+)
 
 
 class Gateway:
@@ -46,6 +54,49 @@ class Gateway:
         )
         return self._personality
 
+
+async def maybe_create_milestones(chat_id: str, message: str):
+    """Detect learning intent and auto-create milestones."""
+    pattern = re.compile(
+        r"(?:i\s+(?:wanna|want to|need to)\s+(?:learn|understand|study)|"
+        r"(?:teach|explain)\s+me\s+(?:about\s+)?|how\s+does\s+|what\s+is\s+)(.{3,60}?)(?:\?|$|\.)",
+        re.IGNORECASE,
+    )
+    m = pattern.search(message.strip())
+    if not m:
+        return
+    topic = m.group(1).strip().rstrip("?.,!")
+    if len(topic) < 4:
+        return
+
+    store = get_milestone_store()
+    # Don't duplicate
+    if store.get_plan_for_topic(chat_id, topic):
+        return
+
+    # Simple fallback milestones (replace with LLM call if you want)
+    titles = ["Introduction", "Core Concepts", "Apply It", "Mastery Check"]
+    milestones = [
+        Milestone(
+            milestone_id=str(uuid.uuid4())[:8],
+            title=t,
+            description=f"Step {i+1} of learning {topic}.",
+            order=i + 1,
+            status=MilestoneStatus.AVAILABLE if i == 0 else MilestoneStatus.LOCKED,
+        )
+        for i, t in enumerate(titles)
+    ]
+    plan = MilestonePlan(
+        plan_id=str(uuid.uuid4())[:12],
+        chat_id=chat_id,
+        subject="General",
+        topic=topic,
+        milestones=milestones,
+    )
+    store.save_plan(plan)
+    logger.info(f"[milestones] Created plan for topic: {topic}")
+
+
     async def process(
         self,
         message: str,
@@ -56,6 +107,9 @@ class Gateway:
         Process a message. Returns dict with 'response' and 'citations'.
         """
         logger.info(f"[{channel}:{client_id}] Processing: {message[:80]}...")
+
+        # Auto-create milestones if learning intent detected
+        await maybe_create_milestones(client_id, message)
 
         self.memory.save_message(client_id, "user", message)
         memory_context = await self.memory.auto_recall(message)
@@ -91,6 +145,10 @@ class Gateway:
           {"type": "token", "content": "..."}         ← response words
         """
         self.memory.save_message(client_id, "user", message)
+
+        # Auto-create milestones if learning intent detected
+        await maybe_create_milestones(client_id, message)
+
         memory_context = await self.memory.auto_recall(message)
         history = self.memory.get_history(client_id, limit=20)
         messages = [{"role": h["role"], "content": h["content"]} for h in history]

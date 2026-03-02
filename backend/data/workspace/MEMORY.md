@@ -6,6 +6,9 @@
 
 ## Important Facts
 
+- User wants to learn about the water cycle, prefers video tutorials
+
+
 - User wants to watch a video of a duck
 
 
