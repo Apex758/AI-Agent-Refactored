@@ -131,6 +131,15 @@ async def websocket_chat(ws: WebSocket, client_id: str):
                             "images": event.get("images", []),
                             "videos": event.get("videos", []),
                         })
+                    
+                    # ── NEW: Visual plan for DiagramBuilder ──────────
+                    elif event["type"] == "visual_plan":
+                        await ws_manager.send(client_id, {
+                            "type": "visual_plan",
+                            "plan": event["plan"],
+                        })
+                    # ── END NEW ──────────────────────────────────────
+                    
                     elif event["type"] == "token":
                         full_response += event["content"]
                         await ws_manager.send(client_id, {"type": "token", "content": event["content"]})

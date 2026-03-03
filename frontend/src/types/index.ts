@@ -44,12 +44,32 @@ export interface Document {
   uploaded_at: string
 }
 
+export interface VisualSpec {
+  visual_id: string
+  visual_type: 'diagram_cycle' | 'diagram_flow' | 'diagram_labeled' | 'chart_bar' | 'comparison'
+  title: string
+  labels: string[]
+  connections: Array<{ from: string; to: string; value?: number }>
+  purpose: string
+  complexity?: string
+  colors?: Record<string, string>
+}
+
+export interface VisualPlan {
+  topic: string
+  lesson_outline: string
+  key_terms: string[]
+  visuals: VisualSpec[]
+  explanation_guidance?: string
+}
+
 export interface WSMessage {
-  type: 'token' | 'complete' | 'status' | 'citations' | 'error' | 'media'
+  type: 'token' | 'complete' | 'status' | 'citations' | 'error' | 'media' | 'scene' | 'visual_plan'
   content?: string
   citations?: Citation[]
   images?: string[]
   videos?: string[]
+  plan?: VisualPlan
 }
 
 export interface VoiceState {

@@ -6,6 +6,15 @@
 
 ## Important Facts
 
+- User is ready to start learning
+
+
+- User wants to learn about the water cycle
+
+
+- User wants to learn about the water cycle
+
+
 - User knows plants need air and water
 
 

@@ -5,6 +5,7 @@ import { Tldraw, Editor } from 'tldraw'
 import 'tldraw/tldraw.css'
 import { useWhiteboardStore } from '@/store/whiteboardStore'
 import { YouTubeShapeUtil } from './YouTubeShapeUtil'
+import { useFrameReflow } from '@/hooks/useFrameReflow'
 
 const SHAPE_UTILS = [YouTubeShapeUtil]
 
@@ -14,13 +15,20 @@ interface WhiteboardProps {
 
 export default function Whiteboard({ chatId }: WhiteboardProps) {
   const { setEditor, saveSnapshot, loadSnapshot, clearPlacedMedia } = useWhiteboardStore()
+  
+  // Grab the editor instance from the store to pass to our reflow hook
+  const editor = useWhiteboardStore((s) => s.editor)
+  
   const editorRef = useRef<Editor | null>(null)
   const prevChatIdRef = useRef<string>(chatId)
 
+  // Wire up frame reflow so resizing a frame automatically wraps text and scales diagrams
+  useFrameReflow(editor)
+
   const handleMount = useCallback(
-    (editor: Editor) => {
-      editorRef.current = editor
-      setEditor(editor)
+    (mountedEditor: Editor) => {
+      editorRef.current = mountedEditor
+      setEditor(mountedEditor)
 
       // Load existing snapshot for this chat
       loadSnapshot(chatId)
@@ -36,11 +44,11 @@ export default function Whiteboard({ chatId }: WhiteboardProps) {
       // Clear placed media tracking for new chat
       clearPlacedMedia()
       // Clear and load new
-      const editor = editorRef.current
+      const currentEditor = editorRef.current
       // Delete all shapes on current page before loading new snapshot
-      const allShapeIds = [...editor.getCurrentPageShapeIds()]
+      const allShapeIds = [...currentEditor.getCurrentPageShapeIds()]
       if (allShapeIds.length > 0) {
-        editor.deleteShapes(allShapeIds)
+        currentEditor.deleteShapes(allShapeIds)
       }
       loadSnapshot(chatId)
       prevChatIdRef.current = chatId

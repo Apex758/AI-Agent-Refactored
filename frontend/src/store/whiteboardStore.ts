@@ -4,6 +4,7 @@ import { create } from 'zustand'
 import { Editor, createShapeId, TLShapeId } from 'tldraw'
 import { ActionPlayer } from '@/components/whiteboard/ActionPlayer'
 import type { WhiteboardScene, WhiteboardAction, PlaybackState } from '@/types/whiteboard-sync'
+import { buildDiagramFrame, type VisualPlan } from '@/components/whiteboard/DiagramBuilder'
 
 /* ═══════════════════════════════════════════════════════════════════
    A4 FRAME GRID LAYOUT
@@ -92,6 +93,7 @@ interface WhiteboardStore {
   loadSnapshot: (chatId: string) => void
   clearWhiteboard: () => void
   clearPlacedMedia: () => void
+  buildVisualPlan: (plan: VisualPlan) => void
   playScene: (scene: WhiteboardScene, speakFn: (text: string) => Promise<void>) => void
   placeYouTubeVideos: (ids: string[]) => void
   placeScrapedMedia: (images: string[], videos: string[]) => void
@@ -176,6 +178,33 @@ export const useWhiteboardStore = create<WhiteboardStore>((set, get) => ({
 
   clearPlacedMedia: () => set({ placedMedia: {}, mediaCount: 0 }),
 
+  buildVisualPlan: (plan) => {
+    const { editor, currentChatId, slotCounts } = get()
+    if (!editor || !plan?.visuals?.length) return
+
+    const slot = slotCounts[currentChatId] || 0
+
+    try {
+      const { frameId, shapeIds } = buildDiagramFrame(editor, plan, slot)
+
+      // Advance slot counter
+      set((s) => ({
+        slotCounts: { ...s.slotCounts, [currentChatId]: slot + 1 },
+      }))
+
+      // Zoom to show the new diagram frame
+      try {
+        editor.zoomToFit({ duration: 400 })
+      } catch {
+        try { editor.zoomToFit() } catch {}
+      }
+
+      console.log(`[whiteboard] Built visual plan: ${plan.topic} (${shapeIds.length} shapes)`)
+    } catch (e) {
+      console.warn('[whiteboard] buildVisualPlan failed:', e)
+    }
+  },
+
   /* ══════════════════════════════════════════════════════════════
      A4 FRAME SCENE PLAYBACK
      
@@ -224,24 +253,25 @@ export const useWhiteboardStore = create<WhiteboardStore>((set, get) => ({
       onWhiteboardAction: (action) => {
         const local = actionToLocal(action.position)
         const isHeading = action.style === 'heading'
-        const isResult = action.style === 'result'
+        const isResult  = action.style === 'result'
         const fontSize: string = isHeading ? 'xl' : isResult ? 'l' : 'm'
 
         const shapeId = createShapeId()
 
-        // Place shape as a child of the A4 frame.
-        // x/y are relative to the frame's top-left corner.
+        // ALL text inside frames uses autoSize:false + width for proper wrapping.
+        // This ensures content reflows when the user adjusts the frame.
         const shapeProps: Record<string, any> = {
           text: action.text,
           size: fontSize,
+          font: 'sans',
+          // Always wrap: set width to fill the frame minus padding
+          autoSize: false,
+          w: A4.WIDTH - 2 * A4.PADDING,
         }
 
+        // Headings get slightly narrower width and are still non-autoSize
+        // so they wrap if the frame is made smaller
         if (isHeading) {
-          // Headings auto-size (they're short)
-          shapeProps.autoSize = true
-        } else {
-          // Body/result text wraps within the frame width
-          shapeProps.autoSize = false
           shapeProps.w = A4.WIDTH - 2 * A4.PADDING
         }
 

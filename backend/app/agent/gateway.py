@@ -31,6 +31,7 @@ from app.milestones.milestone_store import (
 )
 from app.api.whiteboard_types import WhiteboardScene
 from app.utils.text_cleaner import clean_for_tts, clean_for_whiteboard, clean_for_subtitle
+from app.visuals.planner import get_visual_planner, VisualPlan
 
 
 class Gateway:
@@ -60,6 +61,32 @@ class Gateway:
             "When you reference document content, mention the source filename naturally."
         )
         return self._personality
+
+    async def _generate_visual_plan(self, message: str) -> Tuple[str, Optional[dict]]:
+        """
+        Visual-first pipeline: ask LLM what diagrams this lesson needs.
+        Returns (visual_context_for_system_prompt, plan_dict_for_frontend).
+
+        The plan dict is sent to the frontend via WebSocket so DiagramBuilder
+        can create native TLDraw shapes. The context string is injected into
+        the system prompt so the explanation-writing LLM knows what figures exist.
+        """
+        planner = get_visual_planner()
+
+        try:
+            plan = await planner.plan(message)
+            if not plan or not plan.visuals:
+                return "", None
+
+            visual_context = plan.to_system_context()
+            plan_dict = plan.to_dict()
+
+            logger.info(f"[visual-plan] Generated {len(plan.visuals)} diagram(s) for: {plan.topic}")
+            return visual_context, plan_dict
+
+        except Exception as e:
+            logger.warning(f"[visual-plan] Failed: {e}")
+            return "", None
 
     async def process(
         self,
@@ -101,10 +128,7 @@ class Gateway:
     ) -> AsyncGenerator[Dict, None]:
         """
         Stream response tokens with full tool-call support.
-        Yields:
-          {"type": "citations", "citations": [...]}   ← first
-          {"type": "media", "images": [...], "videos": [...]}  ← if web_fetch ran
-          {"type": "token", "content": "..."}         ← response words
+        Now includes visual-first planning for learning queries.
         """
         self.memory.save_message(client_id, "user", message)
 
@@ -112,24 +136,44 @@ class Gateway:
         history = self.memory.get_history(client_id, limit=20)
         messages = [{"role": h["role"], "content": h["content"]} for h in history]
 
-        # Document RAG search — yield citations upfront
+        # Document RAG search
         doc_results = await self.memory.search_documents(message, chat_id=client_id, top_k=5)
         doc_context, citations = self.memory.format_doc_context(doc_results)
         yield {"type": "citations", "citations": citations}
 
-        system_prompt = self._build_system_prompt(memory_context, doc_context, message=message, chat_id=client_id)
+        # ── NEW: Visual-first planning for learning queries ──────────
+        visual_context = ""
+        visual_plan_dict = None
+
+        LEARN_RE = re.compile(
+            r'\b(learn|teach|explain|study|understand|how does|what is|walk me through)\b',
+            re.IGNORECASE,
+        )
+        if LEARN_RE.search(message):
+            visual_context, visual_plan_dict = await self._generate_visual_plan(message)
+
+            # Send the plan to frontend so DiagramBuilder can render it
+            if visual_plan_dict:
+                yield {
+                    "type": "visual_plan",
+                    "plan": visual_plan_dict,
+                }
+        # ── END NEW ──────────────────────────────────────────────────
+
+        system_prompt = self._build_system_prompt(
+            memory_context, doc_context,
+            message=message, chat_id=client_id,
+            visual_context=visual_context, 
+        )
         tool_schemas = self.tools.get_tool_schemas()
 
-        # Run the full agent loop (supports tool calls) and collect scraped media
         full_response, media = await self._agent_loop_with_media(
             messages, system_prompt, tool_schemas
         )
 
-        # Yield any scraped media before tokens so the card appears first
         if media["images"] or media["videos"]:
             yield {"type": "media", "images": media["images"], "videos": media["videos"]}
 
-        # Yield response word-by-word for a streaming feel
         words = full_response.split(" ")
         for i, word in enumerate(words):
             chunk = word + (" " if i < len(words) - 1 else "")
@@ -396,12 +440,18 @@ class Gateway:
 
         return "Reached maximum tool call limit."
 
-    def _build_system_prompt(self, memory_context: str, doc_context: str = "", message: str = "", chat_id: str = "") -> str:
+    def _build_system_prompt(self, memory_context: str, doc_context: str = "", message: str = "", chat_id: str = "", visual_context: str = "") -> str:
         parts = [self.get_personality()]
 
         # Inject chat_id for tool calls
         if chat_id:
             parts.append(f"\nCurrent chat_id: {chat_id}\nAlways use this exact chat_id when calling create_learning_plan or milestone_check.")
+
+        # ── NEW: Inject visual context BEFORE learning mode ──────────
+        # This way the LLM knows what figures exist when it writes the explanation
+        if visual_context:
+            parts.append(visual_context)
+        # ── END NEW ──────────────────────────────────────────────────
 
         # Inject learning mode instructions only when needed
         LEARNING_RE = re.compile(

@@ -8,7 +8,7 @@ import { cleanForTTS } from '@/utils/textCleaner'
 const WS_BASE = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000'
 
 /** Extract complete sentences from a streaming buffer.
- *  Returns the sentences found plus any trailing text without terminal punctuation. */
+ * Returns the sentences found plus any trailing text without terminal punctuation. */
 function extractSentences(buf: string): { sentences: string[]; remainder: string } {
   const sentences: string[] = []
   // Match any text ending with .  !  or  ?  (with optional trailing whitespace)
@@ -92,6 +92,14 @@ export function useWebSocket(clientId: string, onSentence?: (text: string) => vo
             console.log('[DEBUG WS] Received media event:', { images: msg.images, videos: msg.videos })
             addScrapedMedia(msg.images ?? [], msg.videos ?? [])
             break
+          case 'visual_plan': {
+            // Backend sent a structured diagram plan — build it on the whiteboard
+            if (msg.plan && msg.plan.visuals?.length) {
+              console.log(`[ws] Visual plan received: ${msg.plan.topic} (${msg.plan.visuals.length} diagrams)`)
+              useWhiteboardStore.getState().buildVisualPlan(msg.plan)
+            }
+            break
+          }
           case 'whiteboard_scene':
             // FIX: Do NOT pre-synthesize here. ActionPlayer will call
             // speakAndWait sequentially for each subtitle with a unique
