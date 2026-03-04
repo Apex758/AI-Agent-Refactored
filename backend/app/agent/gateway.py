@@ -429,6 +429,37 @@ class Gateway:
                     except Exception as e:
                         result_str = f"Error: {str(e)}"
 
+                    # ── Early exit for create_learning_plan ─────────────────────
+                    if tc["name"] == "create_learning_plan":
+                        # Append result, then immediately do one final text pass
+                        if settings.llm_provider == "openai":
+                            messages.append({
+                                "role": "assistant",
+                                "content": assistant_content,
+                                "tool_calls": [{
+                                    "id": tc["id"],
+                                    "type": "function",
+                                    "function": {"name": tc["name"], "arguments": json.dumps(args)}
+                                }]
+                            })
+                            messages.append({
+                                "role": "tool",
+                                "tool_call_id": tc["id"],
+                                "content": result_str,
+                            })
+                        else:
+                            messages.append({"role": "assistant", "content": f"[Using {tc['name']}]"})
+                            messages.append({"role": "user", "content": f"Tool result for {tc['name']}: {result_str}"})
+
+                        # Force a plain text reply - no more tools allowed
+                        final = await self.llm.generate(
+                            messages=messages,
+                            system_prompt=system_prompt,
+                            tools=None,
+                            use_deep=use_deep,
+                        )
+                        return final.get("content", ""), media
+
                     if settings.llm_provider == "openai":
                         messages.append({
                             "role": "assistant",
@@ -501,6 +532,37 @@ class Gateway:
                         result_str = json.dumps(tool_result) if isinstance(tool_result, dict) else str(tool_result)
                     except Exception as e:
                         result_str = f"Error: {str(e)}"
+
+                    # ── Early exit for create_learning_plan ─────────────────────
+                    if tc["name"] == "create_learning_plan":
+                        # Append result, then immediately do one final text pass
+                        if settings.llm_provider == "openai":
+                            messages.append({
+                                "role": "assistant",
+                                "content": assistant_content,
+                                "tool_calls": [{
+                                    "id": tc["id"],
+                                    "type": "function",
+                                    "function": {"name": tc["name"], "arguments": json.dumps(args)}
+                                }]
+                            })
+                            messages.append({
+                                "role": "tool",
+                                "tool_call_id": tc["id"],
+                                "content": result_str,
+                            })
+                        else:
+                            messages.append({"role": "assistant", "content": f"[Using {tc['name']}]"})
+                            messages.append({"role": "user", "content": f"Tool result for {tc['name']}: {result_str}"})
+
+                        # Force a plain text reply - no more tools allowed
+                        final = await self.llm.generate(
+                            messages=messages,
+                            system_prompt=system_prompt,
+                            tools=None,
+                            use_deep=use_deep,
+                        )
+                        return final.get("content", "")
 
                     if settings.llm_provider == "openai":
                         messages.append({

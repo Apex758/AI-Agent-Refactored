@@ -6,6 +6,27 @@
 
 ## Important Facts
 
+- User can identify solids and liquids
+
+
+- User likes juice
+
+
+- User provided 'a spoon' as an example of a solid
+
+
+- User is currently focused on solids, liquids, and gases
+
+
+- User is learning about states of matter
+
+
+- User wants to learn about the different states of matter
+
+
+- User wants to learn about the different states of matter
+
+
 - User wants to learn about the states of matter
 
 

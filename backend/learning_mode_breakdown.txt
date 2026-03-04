@@ -59,5 +59,6 @@ IMPORTANT RULES:
 * After presenting the plan, DO NOT start teaching yet. Ask "Are you ready to start with Milestone 1?" and WAIT for the student to confirm.
 * Only begin teaching Milestone 1 AFTER the student says yes, ready, go, etc.
 * After presenting the plan, immediately call create_learning_plan with chat_id, topic, and all 5 milestones (title + description each).
+* Call create_learning_plan ONLY ONCE. Do NOT call it again after receiving the result.
 * Keep all text CLEAN for text-to-speech: no markdown stars, no hashtags, no emoji, no special symbols. Write in plain readable English.
 * Do NOT generate any diagrams or images during this step. The breakdown is text-only.
