@@ -10,6 +10,11 @@ Flow:
   6. Execute tool calls, feed results back
   7. Memory auto-capture
   8. Return response + citations to channel
+
+Dual-model routing:
+  - Breakdown step (generating the 5-milestone roadmap) → DEEP model
+  - Teaching step (walking through milestones) → SMALL model
+  - Everything else → SMALL model
 """
 import asyncio
 import json
@@ -34,12 +39,29 @@ from app.utils.text_cleaner import clean_for_tts, clean_for_whiteboard, clean_fo
 from app.visuals.planner import get_visual_planner, VisualPlan
 
 
+# ── Regex for detecting learning intent ─────────────────────
+LEARN_RE = re.compile(
+    r'\b(learn|teach|explain|study|understand|how does|what is|walk me through)\b',
+    re.IGNORECASE,
+)
+
+# ── Regex for detecting "ready/yes/go" confirmation ─────────
+READY_RE = re.compile(
+    r'\b(yes|yeah|yep|ready|go|let.?s go|start|sure|ok|okay|begin)\b',
+    re.IGNORECASE,
+)
+
+
 class Gateway:
     def __init__(self):
         self.llm = get_llm()
         self.memory = get_memory()
         self.tools = get_tool_registry()
         self._personality = None
+        self._breakdown_prompt = None
+        self._teaching_prompt = None
+
+    # ── Prompt file loaders ─────────────────────────────────
 
     def get_personality(self) -> str:
         if self._personality is not None:
@@ -62,14 +84,69 @@ class Gateway:
         )
         return self._personality
 
+    def _get_breakdown_prompt(self) -> str:
+        """Load the breakdown prompt (used by DEEP model for roadmap generation)."""
+        if self._breakdown_prompt is not None:
+            return self._breakdown_prompt
+        path = settings.agent_personality.replace("personality.txt", "learning_mode_breakdown.txt")
+        if os.path.exists(path):
+            with open(path, encoding="utf-8") as f:
+                self._breakdown_prompt = f.read()
+        else:
+            self._breakdown_prompt = ""
+            logger.warning(f"learning_mode_breakdown.txt not found at {path}")
+        return self._breakdown_prompt
+
+    def _get_teaching_prompt(self) -> str:
+        """Load the teaching prompt (used by SMALL model for milestone teaching)."""
+        if self._teaching_prompt is not None:
+            return self._teaching_prompt
+        path = settings.agent_personality.replace("personality.txt", "learning_mode_teaching.txt")
+        if os.path.exists(path):
+            with open(path, encoding="utf-8") as f:
+                self._teaching_prompt = f.read()
+        else:
+            self._teaching_prompt = ""
+            logger.warning(f"learning_mode_teaching.txt not found at {path}")
+        return self._teaching_prompt
+
+    # ── Detect learning phase ───────────────────────────────
+
+    def _detect_learning_phase(self, message: str, chat_id: str) -> str:
+        """
+        Determine which phase of learning we're in:
+          - "breakdown"  → user just asked to learn something, no plan exists yet
+          - "teaching"   → plan exists, we're walking through milestones
+          - "none"       → not a learning message
+        """
+        if not LEARN_RE.search(message) and not READY_RE.search(message):
+            # Check if there's an active plan (user might just be answering a question)
+            store = get_milestone_store()
+            plans = store.list_plans_for_chat(chat_id)
+            if plans and plans[0].current_milestone():
+                return "teaching"
+            return "none"
+
+        # User said something learning-related — check if plan exists
+        store = get_milestone_store()
+        plans = store.list_plans_for_chat(chat_id)
+
+        if plans and plans[0].current_milestone():
+            # Plan exists and not finished → teaching phase
+            return "teaching"
+
+        if LEARN_RE.search(message):
+            # No plan yet → breakdown phase
+            return "breakdown"
+
+        return "none"
+
+    # ── Visual planning ─────────────────────────────────────
+
     async def _generate_visual_plan(self, message: str) -> Tuple[str, Optional[dict]]:
         """
         Visual-first pipeline: ask LLM what diagrams this lesson needs.
         Returns (visual_context_for_system_prompt, plan_dict_for_frontend).
-
-        The plan dict is sent to the frontend via WebSocket so DiagramBuilder
-        can create native TLDraw shapes. The context string is injected into
-        the system prompt so the explanation-writing LLM knows what figures exist.
         """
         planner = get_visual_planner()
 
@@ -88,15 +165,15 @@ class Gateway:
             logger.warning(f"[visual-plan] Failed: {e}")
             return "", None
 
+    # ── Main process (non-streaming) ────────────────────────
+
     async def process(
         self,
         message: str,
         client_id: str = "default",
         channel: str = "web",
     ) -> Dict:
-        """
-        Process a message. Returns dict with 'response' and 'citations'.
-        """
+        """Process a message. Returns dict with 'response' and 'citations'."""
         logger.info(f"[{channel}:{client_id}] Processing: {message[:80]}...")
 
         self.memory.save_message(client_id, "user", message)
@@ -108,10 +185,20 @@ class Gateway:
         doc_results = await self.memory.search_documents(message, chat_id=client_id, top_k=5)
         doc_context, citations = self.memory.format_doc_context(doc_results)
 
-        system_prompt = self._build_system_prompt(memory_context, doc_context, message=message, chat_id=client_id)
+        phase = self._detect_learning_phase(message, client_id)
+        use_deep = (phase == "breakdown")
+
+        system_prompt = self._build_system_prompt(
+            memory_context, doc_context,
+            message=message, chat_id=client_id,
+            learning_phase=phase,
+        )
         tool_schemas = self.tools.get_tool_schemas()
 
-        response_text = await self._agent_loop(messages, system_prompt, tool_schemas)
+        response_text = await self._agent_loop(
+            messages, system_prompt, tool_schemas,
+            use_deep=use_deep,
+        )
 
         self.memory.save_message(client_id, "assistant", response_text)
         await self.memory.auto_capture(message, response_text, client_id)
@@ -119,6 +206,7 @@ class Gateway:
         logger.info(f"[{channel}:{client_id}] Response: {response_text[:80]}...")
         return {"response": response_text, "citations": citations}
 
+    # ── Main process (streaming) ────────────────────────────
 
     async def process_stream(
         self,
@@ -128,7 +216,8 @@ class Gateway:
     ) -> AsyncGenerator[Dict, None]:
         """
         Stream response tokens with full tool-call support.
-        Now includes visual-first planning for learning queries.
+        Routes to DEEP model for breakdown, SMALL model for everything else.
+        Only generates visual plans during teaching phase (not breakdown).
         """
         self.memory.save_message(client_id, "user", message)
 
@@ -141,34 +230,40 @@ class Gateway:
         doc_context, citations = self.memory.format_doc_context(doc_results)
         yield {"type": "citations", "citations": citations}
 
-        # ── NEW: Visual-first planning for learning queries ──────────
+        # ── Detect phase and route model ────────────────────
+        phase = self._detect_learning_phase(message, client_id)
+        use_deep = (phase == "breakdown")
+
+        if use_deep:
+            logger.info(f"[gateway] BREAKDOWN phase → using DEEP model")
+        elif phase == "teaching":
+            logger.info(f"[gateway] TEACHING phase → using SMALL model")
+
+        # ── Visual planning: ONLY during teaching, NOT breakdown ──
         visual_context = ""
         visual_plan_dict = None
 
-        LEARN_RE = re.compile(
-            r'\b(learn|teach|explain|study|understand|how does|what is|walk me through)\b',
-            re.IGNORECASE,
-        )
-        if LEARN_RE.search(message):
+        if phase == "teaching" and LEARN_RE.search(message):
             visual_context, visual_plan_dict = await self._generate_visual_plan(message)
 
-            # Send the plan to frontend so DiagramBuilder can render it
             if visual_plan_dict:
                 yield {
                     "type": "visual_plan",
                     "plan": visual_plan_dict,
                 }
-        # ── END NEW ──────────────────────────────────────────────────
 
+        # ── Build prompt with phase-appropriate instructions ──
         system_prompt = self._build_system_prompt(
             memory_context, doc_context,
             message=message, chat_id=client_id,
-            visual_context=visual_context, 
+            visual_context=visual_context,
+            learning_phase=phase,
         )
         tool_schemas = self.tools.get_tool_schemas()
 
         full_response, media = await self._agent_loop_with_media(
-            messages, system_prompt, tool_schemas
+            messages, system_prompt, tool_schemas,
+            use_deep=use_deep,
         )
 
         if media["images"] or media["videos"]:
@@ -187,15 +282,8 @@ class Gateway:
         """
         Post-process an LLM response into a structured whiteboard scene.
         Returns a dict matching WhiteboardScene schema, or None if parsing fails.
-
-        - Cleans text for TTS and whiteboard
-        - Generates one-line subtitles (shown one at a time)
-        - Includes milestone listing as initial whiteboard actions
         """
-        # Clean the response for scene generation
         cleaned_response = clean_for_whiteboard(full_response)
-
-        # Fetch milestones for this chat to include on whiteboard
         milestone_section = ""
 
         prompt = (
@@ -243,7 +331,6 @@ class Gateway:
             )
             content = result.get("content", "")
 
-            # Strip markdown fences
             if "```" in content:
                 content = content.split("```")[1]
                 if content.startswith("json"):
@@ -265,11 +352,9 @@ class Gateway:
                     else:
                         scene["clean_response"] = clean_for_tts(scene["clean_response"])
 
-                    # Clean all subtitle text for TTS
                     for sub in scene.get("subtitles", []):
                         sub["text"] = clean_for_subtitle(sub.get("text", ""))
 
-                    # Clean all whiteboard action text
                     for action in scene.get("whiteboard", {}).get("actions", []):
                         action["text"] = clean_for_whiteboard(action.get("text", ""))
 
@@ -279,14 +364,17 @@ class Gateway:
             logger.warning(f"Teaching scene generation failed: {e}")
 
         return None
-        
-        
+
+
+    # ── Agent loops (now accept use_deep flag) ──────────────
+
     async def _agent_loop_with_media(
         self,
         messages: List[Dict],
         system_prompt: str,
         tool_schemas: List[Dict],
         max_iterations: int = None,
+        use_deep: bool = False,
     ) -> Tuple[str, Dict]:
         """
         Like _agent_loop but also collects images/videos from web_fetch calls.
@@ -296,13 +384,14 @@ class Gateway:
         iteration = 0
         media: Dict = {"images": [], "videos": []}
         tool_call_counts: Dict[str, int] = {}
-        MAX_SAME_TOOL = 1  # prevent duplicate tool calls
+        MAX_SAME_TOOL = 1
 
         while iteration < max_iterations:
             result = await self.llm.generate(
                 messages=messages,
                 system_prompt=system_prompt,
                 tools=tool_schemas if tool_schemas else None,
+                use_deep=use_deep,
             )
 
             if result["type"] == "text":
@@ -313,12 +402,11 @@ class Gateway:
                 assistant_content = result.get("content", "")
 
                 for tc in tool_calls:
-                    # Deduplication check
                     tool_call_counts[tc['name']] = tool_call_counts.get(tc['name'], 0) + 1
                     if tool_call_counts[tc['name']] > MAX_SAME_TOOL:
                         logger.warning(f"Skipping duplicate tool call: {tc['name']}")
                         continue
-                    
+
                     logger.info(f"Tool call: {tc['name']}({tc.get('arguments', '')})")
                     args = tc.get("arguments", {})
                     if isinstance(args, str):
@@ -329,7 +417,6 @@ class Gateway:
                     try:
                         tool_result = await self.tools.execute(tc["name"], args)
 
-                        # Collect scraped media from web_fetch results
                         if tc["name"] == "web_fetch" and isinstance(tool_result, dict):
                             for img in tool_result.get("images", []):
                                 if img not in media["images"]:
@@ -374,17 +461,19 @@ class Gateway:
         system_prompt: str,
         tool_schemas: List[Dict],
         max_iterations: int = None,
+        use_deep: bool = False,
     ) -> str:
         max_iterations = max_iterations or settings.max_tool_calls
         iteration = 0
         tool_call_counts: Dict[str, int] = {}
-        MAX_SAME_TOOL = 1  # prevent duplicate tool calls
+        MAX_SAME_TOOL = 1
 
         while iteration < max_iterations:
             result = await self.llm.generate(
                 messages=messages,
                 system_prompt=system_prompt,
                 tools=tool_schemas if tool_schemas else None,
+                use_deep=use_deep,
             )
 
             if result["type"] == "text":
@@ -395,12 +484,11 @@ class Gateway:
                 assistant_content = result.get("content", "")
 
                 for tc in tool_calls:
-                    # Deduplication check
                     tool_call_counts[tc['name']] = tool_call_counts.get(tc['name'], 0) + 1
                     if tool_call_counts[tc['name']] > MAX_SAME_TOOL:
                         logger.warning(f"Skipping duplicate tool call: {tc['name']}")
                         continue
-                    
+
                     logger.info(f"Tool call: {tc['name']}({tc.get('arguments', '')})")
                     args = tc.get("arguments", {})
                     if isinstance(args, str):
@@ -440,29 +528,42 @@ class Gateway:
 
         return "Reached maximum tool call limit."
 
-    def _build_system_prompt(self, memory_context: str, doc_context: str = "", message: str = "", chat_id: str = "", visual_context: str = "") -> str:
+    # ── System prompt builder ───────────────────────────────
+
+    def _build_system_prompt(
+        self,
+        memory_context: str,
+        doc_context: str = "",
+        message: str = "",
+        chat_id: str = "",
+        visual_context: str = "",
+        learning_phase: str = "none",
+    ) -> str:
         parts = [self.get_personality()]
 
         # Inject chat_id for tool calls
         if chat_id:
-            parts.append(f"\nCurrent chat_id: {chat_id}\nAlways use this exact chat_id when calling create_learning_plan or milestone_check.")
+            parts.append(
+                f"\nCurrent chat_id: {chat_id}\n"
+                "Always use this exact chat_id when calling create_learning_plan or milestone_check."
+            )
 
-        # ── NEW: Inject visual context BEFORE learning mode ──────────
-        # This way the LLM knows what figures exist when it writes the explanation
+        # Inject visual context (only present during teaching phase)
         if visual_context:
             parts.append(visual_context)
-        # ── END NEW ──────────────────────────────────────────────────
 
-        # Inject learning mode instructions only when needed
-        LEARNING_RE = re.compile(
-            r'\b(learn|teach me|explain|study|understand|how does|what is|walk me through)\b',
-            re.IGNORECASE
-        )
-        if LEARNING_RE.search(message):
-            learning_path = settings.agent_personality.replace("personality.txt", "learning_mode.txt")
-            if os.path.exists(learning_path):
-                with open(learning_path) as f:
-                    parts.append(f.read())
+        # ── Phase-specific prompt injection ─────────────────
+        if learning_phase == "breakdown":
+            breakdown_prompt = self._get_breakdown_prompt()
+            if breakdown_prompt:
+                parts.append(breakdown_prompt)
+                logger.info("[gateway] Injected BREAKDOWN prompt")
+
+        elif learning_phase == "teaching":
+            teaching_prompt = self._get_teaching_prompt()
+            if teaching_prompt:
+                parts.append(teaching_prompt)
+                logger.info("[gateway] Injected TEACHING prompt")
 
         if memory_context:
             parts.append(f"\n--- YOUR MEMORY ---\n{memory_context}\n--- END MEMORY ---\n")
@@ -497,11 +598,9 @@ async def maybe_create_milestones(chat_id: str, message: str):
         return
 
     store = get_milestone_store()
-    # Don't duplicate
     if store.get_plan_for_topic(chat_id, topic):
         return
 
-    # 5-milestone framework
     titles = [
         ("Exposure",        f"First contact with {topic} — student recognizes it and shows curiosity."),
         ("Understanding",   f"Grasps the core meaning, vocabulary, and key concepts of {topic}."),

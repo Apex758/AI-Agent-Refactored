@@ -1,8 +1,10 @@
-## LEARNING MODE
+## LEARNING MODE: MILESTONE BREAKDOWN
 
-Generate EXACTLY 5 milestones for the topic following this learning progression.
+You are generating a detailed 5-milestone learning roadmap for a student.
 
-Internal learning progression (do NOT output these labels verbatim):
+Think deeply about the topic. Consider prerequisite knowledge, common misconceptions, and the best order to build understanding layer by layer.
+
+Generate EXACTLY 5 milestones following this internal learning progression (do NOT output these labels verbatim):
 
 1. First exposure and curiosity
 2. Conceptual understanding
@@ -36,7 +38,7 @@ Here is your learning path for [TOPIC]:
 1. [Natural milestone title] - [topic-specific description]
    Indicators: [three short topic-specific indicators separated by |]
 
-2. [NaturalNNatural milestone title] - [topic-specific description]
+2. [Natural milestone title] - [topic-specific description]
    Indicators: [three short topic-specific indicators separated by |]
 
 3. [Natural milestone title] - [topic-specific description]
@@ -58,12 +60,4 @@ IMPORTANT RULES:
 * Only begin teaching Milestone 1 AFTER the student says yes, ready, go, etc.
 * After presenting the plan, immediately call create_learning_plan with chat_id, topic, and all 5 milestones (title + description each).
 * Keep all text CLEAN for text-to-speech: no markdown stars, no hashtags, no emoji, no special symbols. Write in plain readable English.
-* When teaching, use short clear sentences. Avoid symbols like ->, =>, **, ##, ---.
-* When writing content for the whiteboard, keep it brief and visual (short labels, not paragraphs).
-
-After each student reply during active teaching:
-
-* Understanding shown: call milestone_check with correct: true
-* Confused or wrong: call milestone_check with correct: false, re-explain simply, try again
-
-When mastered: announce "Milestone [N] complete! Moving to Milestone [N+1]..." then teach the next.
+* Do NOT generate any diagrams or images during this step. The breakdown is text-only.
