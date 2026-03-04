@@ -6,6 +6,9 @@
 
 ## Important Facts
 
+- User wants to learn about the states of matter
+
+
 - User is ready to start learning
 
 
