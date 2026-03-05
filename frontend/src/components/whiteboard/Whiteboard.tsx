@@ -65,13 +65,13 @@ export default function Whiteboard({ chatId }: WhiteboardProps) {
     return () => window.removeEventListener('beforeunload', handleBeforeUnload)
   }, [saveSnapshot])
 
-  // Periodic auto-save every 10 seconds
+  // Periodic auto-save every 5 seconds
   useEffect(() => {
     const interval = setInterval(() => {
       if (editorRef.current && prevChatIdRef.current) {
         saveSnapshot(prevChatIdRef.current)
       }
-    }, 10_000)
+    }, 5_000)
     return () => clearInterval(interval)
   }, [saveSnapshot])
 

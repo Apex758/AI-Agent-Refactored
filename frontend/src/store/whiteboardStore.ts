@@ -41,7 +41,7 @@ const PAGE_ORDER: PageName[] = [
 const A4 = {
   WIDTH:   800,
   HEIGHT:  1100,
-  GAP:     60,
+  GAP:     160,    // wide gap so A4 frames never visually overlap
   COLS:    4,
   PADDING: 40,
   ROW_H:   100,
@@ -64,7 +64,7 @@ function actionToLocal(pos: { x: number; y: number }): { x: number; y: number } 
 }
 
 const MEDIA_AREA = {
-  X: A4.COLS * (A4.WIDTH + A4.GAP) + 120,
+  X: A4.COLS * (A4.WIDTH + A4.GAP) + 200,
   Y: 0,
   STEP: 340,
 }
@@ -416,8 +416,8 @@ export const useWhiteboardStore = create<WhiteboardStore>((set, get) => ({
         slotCounts: { ...s.slotCounts, [sk]: slot + 1 },
       }))
 
-      // Auto-save so diagram persists
-      setTimeout(() => get().saveSnapshot(currentChatId), 500)
+      // Save immediately so the frame persists even if user refreshes
+      get().saveSnapshot(currentChatId)
 
       // Auto-center on the new frame
       centerOnFrame(editor, frameId)
@@ -463,6 +463,9 @@ export const useWhiteboardStore = create<WhiteboardStore>((set, get) => ({
       slotCounts: { ...s.slotCounts, [sk]: slot + 1 },
     }))
 
+    // Save immediately so the new frame persists even if user refreshes mid-playback
+    get().saveSnapshot(currentChatId)
+
     // Auto-center on the new frame immediately
     centerOnFrame(editor, frameId)
 
@@ -500,8 +503,8 @@ export const useWhiteboardStore = create<WhiteboardStore>((set, get) => ({
 
       onComplete: () => {
         set({ activePlayer: null })
-        // Auto-save after scene playback
-        setTimeout(() => get().saveSnapshot(get().currentChatId), 500)
+        // Save again after all shapes are placed
+        get().saveSnapshot(get().currentChatId)
         // Re-center on the completed frame
         centerOnFrame(editor, frameId)
       },

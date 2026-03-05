@@ -57,7 +57,7 @@ const FRAME = {
   WIDTH: 800,
   HEIGHT: 1100,
   PAD: 50,       // inner padding
-  GAP: 60,       // gap between frames in the grid
+  GAP: 160,      // gap between frames — MUST match A4.GAP in whiteboardStore
   COLS: 4,
 }
 
