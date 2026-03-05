@@ -84,8 +84,6 @@ export function useWebSocket(clientId: string) {
             useUIStore.getState().setMode('whiteboard')
             wb.switchToPage(PAGES.TEACHING)
             wb.placeTeachingImage(msg.images ?? [])
-            // Also surface the image in the chat message
-            addScrapedMedia(msg.images ?? [], [])
             break
           }
 

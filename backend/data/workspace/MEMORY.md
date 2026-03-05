@@ -6,6 +6,27 @@
 
 ## Important Facts
 
+- User understands rain as a form of precipitation
+
+
+- User understands condensation as water vapor cooling down and forming droplets/ice crystals
+
+
+- User understands evaporation as water turning into steam when heated by the sun
+
+
+- User understands precipitation (rain)
+
+
+- User understands condensation
+
+
+- User understands evaporation
+
+
+- User is learning about the water cycle
+
+
 - User wants to see images of snow, sleet, and hail.
 
 
