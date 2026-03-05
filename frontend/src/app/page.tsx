@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect, FormEvent, useCallback } from 'react'
 import { useChatStore } from '@/store/chatStore'
 import { useUIStore } from '@/store/uiStore'
-import { useWhiteboardStore } from '@/store/whiteboardStore'
+import { useWhiteboardStore, PAGES } from '@/store/whiteboardStore'
 import { useWebSocket } from '@/hooks/useWebSocket'
 import { useVoice } from '@/hooks/useVoice'
 import CenterStage from '@/components/CenterStage'
@@ -40,13 +40,11 @@ function MessageContent({ content }: { content: string }) {
     <>
       {parts.map((p, i) => {
         if (p.type === 'url') {
-          // YouTube embed — lazy (only mounts iframe when in viewport)
           const ytId = getYouTubeId(p.value)
           if (ytId) {
             return <LazyYouTubeEmbed key={i} ytId={ytId} />
           }
 
-          // FIX 2: image URL inline preview
           if (isImageUrl(p.value)) {
             return (
               <span key={i} className="block my-2">
@@ -387,14 +385,15 @@ export default function Home() {
     setProcessing, addScrapedMedia,
   } = useChatStore()
 
-  // FIX 3: watch board mode for auto-collapse
   const { mode, setMode } = useUIStore()
-  const { placeYouTubeVideos, placeScrapedMedia, focusOrPlaceMedia, clearWhiteboard } = useWhiteboardStore()
+  const {
+    placeYouTubeVideos, placeScrapedMedia, focusOrPlaceMedia,
+    clearWhiteboard, switchToPage,
+  } = useWhiteboardStore()
 
   const currentMessages  = currentChatId ? (messagesByChatId[currentChatId] || []) : []
   const currentDocuments = currentChatId ? (documentsByChatId[currentChatId] || []) : []
 
-  // Stable refs so onSentenceCallback never changes identity (avoids re-subscribing WS)
   const voiceSpeakRef      = useRef<((text: string) => void) | undefined>(undefined)
   const voiceEnabledRef    = useRef(false)
   const onSentenceCallback = useCallback((text: string) => {
@@ -412,7 +411,7 @@ export default function Home() {
   const [docPanelOpen, setDocPanelOpen]   = useState(false)
   const [uploadError, setUploadError]     = useState<string | null>(null)
   const [voiceEnabled, setVoiceEnabled]   = useState(false)
-  voiceEnabledRef.current = voiceEnabled  // render-phase sync — no useEffect needed
+  voiceEnabledRef.current = voiceEnabled
 
   const bottomRef    = useRef<HTMLDivElement>(null)
   const editInputRef = useRef<HTMLInputElement>(null)
@@ -420,7 +419,7 @@ export default function Home() {
   const callbackRef  = useRef<(text: string) => void>(() => {})
   const wasSpeakingRef = useRef(false)
 
-  // FIX 3: auto-collapse panels when switching to board, don't auto-restore on chat
+  // auto-collapse panels when switching to board
   useEffect(() => {
     if (mode === 'whiteboard') {
       setSidebarOpen(false)
@@ -431,7 +430,6 @@ export default function Home() {
   // ── Voice ──────────────────────────────────────────────────────
   const voice = useVoice(useCallback((text: string) => callbackRef.current(text), []))
 
-  // Keep voiceSpeakRef in sync so onSentenceCallback always calls the latest speak fn
   useEffect(() => { voiceSpeakRef.current = voice.speak }, [voice.speak])
 
   useEffect(() => {
@@ -448,7 +446,6 @@ export default function Home() {
     const last = currentMessages[currentMessages.length - 1]
     if (last?.role === 'assistant' && last.id !== lastSpokenId.current) {
       lastSpokenId.current = last.id
-      // Sentences were already spoken sentence-by-sentence during streaming — skip repeat
       if (streamSpokenRef.current) {
         streamSpokenRef.current = false
         return
@@ -461,23 +458,15 @@ export default function Home() {
     if (voice.interimText) setInput(voice.interimText)
   }, [voice.interimText])
 
-
   // ── Auto-listen after AI finishes answering with a question ──
   useEffect(() => {
     const wasSpeaking = wasSpeakingRef.current
     wasSpeakingRef.current = voice.isSpeaking
-
-    // Only trigger on the transition: speaking → not speaking
     if (!wasSpeaking || voice.isSpeaking) return
-    // Guards: must have voice enabled, not already listening, not processing
     if (!voiceEnabled || voice.isListening || isProcessing) return
-
-    // Check if the last assistant message ends with a question mark
     const last = currentMessages[currentMessages.length - 1]
     if (last?.role === 'assistant' && /\?\s*$/.test(last.content.trim())) {
-      // Brief pause before listening so the user hears the question end
       const timer = setTimeout(() => {
-        // Re-check conditions (they might have changed during the timeout)
         if (!voice.isListening && !voice.isSpeaking) {
           voice.startListening()
         }
@@ -485,7 +474,6 @@ export default function Home() {
       return () => clearTimeout(timer)
     }
   }, [voice.isSpeaking, voiceEnabled, voice.isListening, isProcessing, currentMessages])
-
 
   // ── Auto-place YouTube videos on the whiteboard ────────────────
   useEffect(() => {
@@ -496,7 +484,6 @@ export default function Home() {
       YT_RE.lastIndex = 0
       let m: RegExpExecArray | null
       while ((m = YT_RE.exec(msg.content)) !== null) seen.add(m[1])
-      // Also pick up IDs surfaced via the backend media scraper
       msg.media?.videos?.forEach(id => seen.add(id))
     }
     if (seen.size > 0) placeYouTubeVideos([...seen])
@@ -512,7 +499,6 @@ export default function Home() {
       IMG_MD_RE.lastIndex = 0
       let m: RegExpExecArray | null
       while ((m = IMG_MD_RE.exec(msg.content)) !== null) seen.add(m[1])
-      // Also pick up images surfaced via the backend media scraper
       msg.media?.images?.forEach(url => seen.add(url))
     }
     if (seen.size > 0) placeScrapedMedia([...seen], [])
@@ -523,7 +509,6 @@ export default function Home() {
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [currentMessages, streamingContent])
   useEffect(() => { if (editingChatId) editInputRef.current?.focus() }, [editingChatId])
 
-  // FIX 1: after snapshot is added to chat, trigger agent via WS
   const handleAfterSnapshot = useCallback(() => {
     if (!currentChatId) return
     setProcessing(true)
@@ -858,6 +843,10 @@ export default function Home() {
                           media={msg.media}
                           onOpen={(key) => {
                             setMode('whiteboard')
+                            // Route videos → Note Taking page; images stay on current page
+                            if (key.startsWith('yt-')) {
+                              switchToPage(PAGES.NOTE_TAKING)
+                            }
                             setTimeout(() => focusOrPlaceMedia(key), 250)
                           }}
                         />

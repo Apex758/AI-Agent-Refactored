@@ -7,32 +7,46 @@ import type { WhiteboardScene, WhiteboardAction, PlaybackState } from '@/types/w
 import { buildDiagramFrame, type VisualPlan } from '@/components/whiteboard/DiagramBuilder'
 
 /* ═══════════════════════════════════════════════════════════════════
+   PRE-MADE PAGES
+   
+   Every chat's whiteboard has exactly four named pages:
+     1. Teaching    — milestone lessons, diagrams, whiteboard scenes
+     2. Practice    — reserved for future practice workflows
+     3. Note Taking — videos opened from chat, scraped media
+     4. Scratch     — free-form user notes
+   
+   Pages are created lazily on first load and restored from snapshot.
+   ═══════════════════════════════════════════════════════════════════ */
+
+export const PAGES = {
+  TEACHING:    'Teaching',
+  PRACTICE:    'Practice',
+  NOTE_TAKING: 'Note Taking',
+  SCRATCH:     'Scratch',
+} as const
+
+export type PageName = (typeof PAGES)[keyof typeof PAGES]
+
+const PAGE_ORDER: PageName[] = [
+  PAGES.TEACHING,
+  PAGES.PRACTICE,
+  PAGES.NOTE_TAKING,
+  PAGES.SCRATCH,
+]
+
+/* ═══════════════════════════════════════════════════════════════════
    A4 FRAME GRID LAYOUT
-   
-   Each scene/content block gets its own A4-sized frame.
-   Frames are laid out in a 4-column grid:
-   
-   ┌──────┐ ┌──────┐ ┌──────┐ ┌──────┐
-   │  0   │ │  1   │ │  2   │ │  3   │  ← Row 0
-   └──────┘ └──────┘ └──────┘ └──────┘
-   ┌──────┐ ┌──────┐
-   │  4   │ │  5   │ ...                 ← Row 1
-   └──────┘ └──────┘
-   
-   Frames are movable by the user. TLDraw's snap mode aligns edges.
-   Content shapes live INSIDE frames (parentId = frameId).
    ═══════════════════════════════════════════════════════════════════ */
 
 const A4 = {
   WIDTH:   800,
   HEIGHT:  1100,
-  GAP:     60,    // space between frames
-  COLS:    4,     // frames per row
-  PADDING: 40,    // inner padding within frame
-  ROW_H:   100,   // vertical step per content row inside a frame
+  GAP:     60,
+  COLS:    4,
+  PADDING: 40,
+  ROW_H:   100,
 } as const
 
-/** Convert a grid slot index (0, 1, 2…) → top-left pixel position */
 function slotToXY(slot: number): { x: number; y: number } {
   const col = slot % A4.COLS
   const row = Math.floor(slot / A4.COLS)
@@ -42,18 +56,13 @@ function slotToXY(slot: number): { x: number; y: number } {
   }
 }
 
-/**
- * Map an action's grid position to local pixel coords inside a frame.
- * Action positions:  x = column (0–1),  y = row (−1 = title, 0+ = content)
- */
 function actionToLocal(pos: { x: number; y: number }): { x: number; y: number } {
   return {
     x: A4.PADDING + Math.max(0, pos.x) * 360,
-    y: A4.PADDING + (pos.y + 1) * A4.ROW_H, // +1 so y=-1 → top of frame
+    y: A4.PADDING + (pos.y + 1) * A4.ROW_H,
   }
 }
 
-/** Media goes to the right of the A4 grid */
 const MEDIA_AREA = {
   X: A4.COLS * (A4.WIDTH + A4.GAP) + 120,
   Y: 0,
@@ -71,28 +80,151 @@ const EMPTY_PLAYBACK: PlaybackState = {
   isFading: false,
 }
 
+/* ── Page helpers ─────────────────────────────────────────────────── */
+
+/**
+ * Ensure all four named pages exist.
+ * On a fresh board the default "Page 1" is renamed to "Teaching".
+ * Idempotent — safe to call after every snapshot load.
+ */
+function ensurePages(editor: Editor): void {
+  const pages = editor.getPages()
+  const byName = new Set(pages.map((p) => p.name))
+  const hasAnyNamed = PAGE_ORDER.some((n) => byName.has(n))
+
+  // Fresh board: rename the single default page → Teaching
+  if (!hasAnyNamed && pages.length >= 1) {
+    editor.renamePage(pages[0].id, PAGES.TEACHING)
+    byName.add(PAGES.TEACHING)
+  }
+
+  // Create any missing pages
+  for (const name of PAGE_ORDER) {
+    if (!byName.has(name)) {
+      editor.createPage({ name })
+    }
+  }
+}
+
+/** Find a page by name, returns its TLPageId or null. */
+function findPage(editor: Editor, name: string) {
+  return editor.getPages().find((p) => p.name === name) ?? null
+}
+
+/** Center the viewport on a specific frame with a comfortable zoom level. */
+function centerOnFrame(editor: Editor, frameId: TLShapeId): void {
+  try {
+    editor.selectNone()
+    editor.select(frameId)
+    // zoomToSelection centres the camera on the selected shapes with nice padding
+    try {
+      editor.zoomToSelection({ duration: 400 })
+    } catch {
+      try { editor.zoomToSelection() } catch { /* fallback: do nothing */ }
+    }
+  } catch {
+    // Safety net — zoom to fit everything if the above fails
+    try { editor.zoomToFit({ duration: 400 }) } catch {}
+  }
+}
+
+/* ── localStorage persistence ─────────────────────────────────────── */
+
+const SNAP_KEY   = (id: string) => `wb-snap-${id}`
+const SLOTS_KEY  = (id: string) => `wb-slots-${id}`
+const MEDIA_KEY  = (id: string) => `wb-media-${id}`
+const MCOUNT_KEY = (id: string) => `wb-mcount-${id}`
+
+function persistSnapshot(chatId: string, snapshot: any): void {
+  try {
+    const json = JSON.stringify(snapshot)
+    if (json.length > 4 * 1024 * 1024) {
+      console.warn(`[whiteboard] Snapshot for ${chatId} too large (${(json.length / 1024 / 1024).toFixed(1)}MB) — skipping persist`)
+      return
+    }
+    localStorage.setItem(SNAP_KEY(chatId), json)
+  } catch (e) {
+    console.warn('[whiteboard] persist snapshot failed:', e)
+  }
+}
+
+function loadPersistedSnapshot(chatId: string): any | null {
+  try {
+    const raw = localStorage.getItem(SNAP_KEY(chatId))
+    return raw ? JSON.parse(raw) : null
+  } catch { return null }
+}
+
+function removePersistedData(chatId: string): void {
+  try {
+    localStorage.removeItem(SNAP_KEY(chatId))
+    localStorage.removeItem(SLOTS_KEY(chatId))
+    localStorage.removeItem(MEDIA_KEY(chatId))
+    localStorage.removeItem(MCOUNT_KEY(chatId))
+  } catch {}
+}
+
+/** Slot counts are now per-page: { Teaching: 2, Practice: 0, … } */
+function persistSlotCounts(chatId: string, counts: Record<string, number>): void {
+  try { localStorage.setItem(SLOTS_KEY(chatId), JSON.stringify(counts)) } catch {}
+}
+
+function loadPersistedSlotCounts(chatId: string): Record<string, number> {
+  try {
+    const raw = localStorage.getItem(SLOTS_KEY(chatId))
+    if (!raw) return {}
+    const parsed = JSON.parse(raw)
+    // Backwards compat: old format was a single number
+    if (typeof parsed === 'number') return { [PAGES.TEACHING]: parsed }
+    return parsed
+  } catch { return {} }
+}
+
+function persistPlacedMedia(chatId: string, media: Record<string, boolean>, count: number): void {
+  try {
+    localStorage.setItem(MEDIA_KEY(chatId), JSON.stringify(media))
+    localStorage.setItem(MCOUNT_KEY(chatId), String(count))
+  } catch {}
+}
+
+function loadPersistedMedia(chatId: string): { placedMedia: Record<string, boolean>; mediaCount: number } {
+  try {
+    const raw = localStorage.getItem(MEDIA_KEY(chatId))
+    const cRaw = localStorage.getItem(MCOUNT_KEY(chatId))
+    return {
+      placedMedia: raw ? JSON.parse(raw) : {},
+      mediaCount: cRaw ? parseInt(cRaw, 10) || 0 : 0,
+    }
+  } catch { return { placedMedia: {}, mediaCount: 0 } }
+}
+
+/* ── Slot-count key helper (per chat + per page) ──────────────────── */
+
+function slotKey(chatId: string, pageName: string): string {
+  return `${chatId}:${pageName}`
+}
+
 /* ── Store interface ──────────────────────────────────────────────── */
 
 interface WhiteboardStore {
-  // State
   editor: Editor | null
   currentChatId: string
   currentSubtitle: string
   playbackState: PlaybackState
   activePlayer: ActionPlayer | null
 
-  // Persistence — keyed by chatId
   snapshots: Record<string, any>
-  slotCounts: Record<string, number>   // how many A4 frames per chat
-  placedMedia: Record<string, boolean> // dedup keys for placed media
-  mediaCount: number                   // vertical counter for media stack
+  slotCounts: Record<string, number>   // keyed by "chatId:pageName"
+  placedMedia: Record<string, boolean>
+  mediaCount: number
 
-  // Public actions
   setEditor: (editor: Editor) => void
   saveSnapshot: (chatId: string) => void
   loadSnapshot: (chatId: string) => void
   clearWhiteboard: () => void
   clearPlacedMedia: () => void
+  switchToPage: (pageName: string) => void
+  getCurrentPageName: () => string
   buildVisualPlan: (plan: VisualPlan) => void
   playScene: (scene: WhiteboardScene, speakFn: (text: string) => Promise<void>) => void
   placeYouTubeVideos: (ids: string[]) => void
@@ -117,14 +249,11 @@ export const useWhiteboardStore = create<WhiteboardStore>((set, get) => ({
   /* ── Editor lifecycle ────────────────────────────────────────── */
 
   setEditor: (editor) => {
-    // Enable object-snap so A4 frames snap-align to each other's edges
-    try {
-      editor.user.updateUserPreferences({ isSnapMode: true })
-    } catch {
-      // Older TLDraw versions may not have this
-    }
+    try { editor.user.updateUserPreferences({ isSnapMode: true }) } catch {}
     set({ editor })
   },
+
+  /* ── Snapshot persistence ────────────────────────────────────── */
 
   saveSnapshot: (chatId) => {
     const { editor } = get()
@@ -132,6 +261,17 @@ export const useWhiteboardStore = create<WhiteboardStore>((set, get) => ({
     try {
       const snapshot = editor.store.getStoreSnapshot()
       set((s) => ({ snapshots: { ...s.snapshots, [chatId]: snapshot } }))
+      persistSnapshot(chatId, snapshot)
+
+      // Persist per-page slot counts for this chat
+      const allSlots = get().slotCounts
+      const chatSlots: Record<string, number> = {}
+      const prefix = chatId + ':'
+      for (const [k, v] of Object.entries(allSlots)) {
+        if (k.startsWith(prefix)) chatSlots[k.slice(prefix.length)] = v
+      }
+      persistSlotCounts(chatId, chatSlots)
+      persistPlacedMedia(chatId, get().placedMedia, get().mediaCount)
     } catch (e) {
       console.warn('[whiteboard] saveSnapshot failed:', e)
     }
@@ -140,91 +280,170 @@ export const useWhiteboardStore = create<WhiteboardStore>((set, get) => ({
   loadSnapshot: (chatId) => {
     const { editor, snapshots } = get()
     if (!editor || !chatId) return
-
     set({ currentChatId: chatId })
 
-    const snap = snapshots[chatId]
+    // 1. Try in-memory, then localStorage
+    let snap = snapshots[chatId]
+    if (!snap) {
+      snap = loadPersistedSnapshot(chatId)
+      if (snap) set((s) => ({ snapshots: { ...s.snapshots, [chatId]: snap } }))
+    }
+
     if (snap) {
       try {
         editor.store.loadSnapshot(snap)
       } catch (e) {
         console.warn('[whiteboard] loadSnapshot failed:', e)
       }
+    } else {
+      // No snapshot → clear all shapes on every existing page
+      const currentPageId = editor.getCurrentPageId()
+      for (const page of editor.getPages()) {
+        editor.setCurrentPage(page.id)
+        const ids = [...editor.getCurrentPageShapeIds()]
+        if (ids.length > 0) editor.deleteShapes(ids)
+      }
+      // Restore to the page we were on (or first page)
+      try { editor.setCurrentPage(currentPageId) } catch {}
     }
 
-    // Derive slot count from existing frame shapes on the page
-    const frameCount = [...editor.getCurrentPageShapeIds()]
-      .map((id) => editor.getShape(id))
-      .filter((s) => s?.type === 'frame')
-      .length
+    // 2. Ensure the four named pages exist
+    ensurePages(editor)
+
+    // 3. Switch to Teaching page by default
+    const teachingPage = findPage(editor, PAGES.TEACHING)
+    if (teachingPage) editor.setCurrentPage(teachingPage.id)
+
+    // 4. Restore per-page slot counts from localStorage
+    const persisted = loadPersistedSlotCounts(chatId)
+    const slotUpdates: Record<string, number> = {}
+    for (const pageName of PAGE_ORDER) {
+      const key = slotKey(chatId, pageName)
+      // Count actual frames on this page as a fallback
+      const page = findPage(editor, pageName)
+      let frameCount = 0
+      if (page) {
+        const prevPage = editor.getCurrentPageId()
+        editor.setCurrentPage(page.id)
+        frameCount = [...editor.getCurrentPageShapeIds()]
+          .map((id) => editor.getShape(id))
+          .filter((s) => s?.type === 'frame').length
+        editor.setCurrentPage(prevPage)
+      }
+      slotUpdates[key] = Math.max(persisted[pageName] || 0, frameCount)
+    }
+
+    // Restore to Teaching after counting
+    if (teachingPage) editor.setCurrentPage(teachingPage.id)
+
+    // 5. Restore media tracking
+    const { placedMedia, mediaCount } = loadPersistedMedia(chatId)
 
     set((s) => ({
-      slotCounts: { ...s.slotCounts, [chatId]: frameCount },
+      slotCounts: { ...s.slotCounts, ...slotUpdates },
+      placedMedia,
+      mediaCount,
     }))
   },
+
+  /* ── Page management ─────────────────────────────────────────── */
+
+  switchToPage: (pageName: string) => {
+    const { editor } = get()
+    if (!editor) return
+    const page = findPage(editor, pageName)
+    if (page) {
+      editor.setCurrentPage(page.id)
+    }
+  },
+
+  getCurrentPageName: () => {
+    const { editor } = get()
+    if (!editor) return PAGES.TEACHING
+    const current = editor.getCurrentPage()
+    return current?.name ?? PAGES.TEACHING
+  },
+
+  /* ── Clear ───────────────────────────────────────────────────── */
 
   clearWhiteboard: () => {
     const { editor, currentChatId } = get()
     if (!editor) return
-    const ids = [...editor.getCurrentPageShapeIds()]
-    if (ids.length > 0) editor.deleteShapes(ids)
+
+    // Clear shapes on ALL pages
+    const currentPageId = editor.getCurrentPageId()
+    for (const page of editor.getPages()) {
+      editor.setCurrentPage(page.id)
+      const ids = [...editor.getCurrentPageShapeIds()]
+      if (ids.length > 0) editor.deleteShapes(ids)
+    }
+    try { editor.setCurrentPage(currentPageId) } catch {}
+
     if (currentChatId) {
+      // Reset all slot counts for this chat
+      const slotUpdates: Record<string, number> = {}
+      for (const pageName of PAGE_ORDER) {
+        slotUpdates[slotKey(currentChatId, pageName)] = 0
+      }
       set((s) => ({
-        slotCounts: { ...s.slotCounts, [currentChatId]: 0 },
+        slotCounts: { ...s.slotCounts, ...slotUpdates },
         mediaCount: 0,
+        placedMedia: {},
       }))
+      removePersistedData(currentChatId)
     }
   },
 
   clearPlacedMedia: () => set({ placedMedia: {}, mediaCount: 0 }),
 
+  /* ── Build visual plan (Teaching page) ───────────────────────── */
+
   buildVisualPlan: (plan) => {
     const { editor, currentChatId, slotCounts } = get()
     if (!editor || !plan?.visuals?.length) return
 
-    const slot = slotCounts[currentChatId] || 0
+    // Switch to Teaching page
+    const teachingPage = findPage(editor, PAGES.TEACHING)
+    if (teachingPage) editor.setCurrentPage(teachingPage.id)
+
+    const sk = slotKey(currentChatId, PAGES.TEACHING)
+    const slot = slotCounts[sk] || 0
 
     try {
       const { frameId, shapeIds } = buildDiagramFrame(editor, plan, slot)
 
-      // Advance slot counter
       set((s) => ({
-        slotCounts: { ...s.slotCounts, [currentChatId]: slot + 1 },
+        slotCounts: { ...s.slotCounts, [sk]: slot + 1 },
       }))
 
-      // Zoom to show the new diagram frame
-      try {
-        editor.zoomToFit({ duration: 400 })
-      } catch {
-        try { editor.zoomToFit() } catch {}
-      }
+      // Auto-save so diagram persists
+      setTimeout(() => get().saveSnapshot(currentChatId), 500)
 
-      console.log(`[whiteboard] Built visual plan: ${plan.topic} (${shapeIds.length} shapes)`)
+      // Auto-center on the new frame
+      centerOnFrame(editor, frameId)
+
+      console.log(`[whiteboard] Built visual plan on Teaching page: ${plan.topic} (${shapeIds.length} shapes)`)
     } catch (e) {
       console.warn('[whiteboard] buildVisualPlan failed:', e)
     }
   },
 
-  /* ══════════════════════════════════════════════════════════════
-     A4 FRAME SCENE PLAYBACK
-     
-     Each playScene call:
-     1. Allocates the next A4 slot in the grid
-     2. Creates a TLDraw "frame" shape at that slot
-     3. ActionPlayer places content shapes INSIDE the frame
-     4. Content uses parentId so it moves with the frame
-     ══════════════════════════════════════════════════════════════ */
+  /* ── Scene playback (Teaching page) ──────────────────────────── */
 
   playScene: (scene, speakFn) => {
     const { editor, currentChatId, slotCounts } = get()
     if (!editor) return
 
-    // Stop any active playback
     const prev = get().activePlayer
     if (prev) prev.stop()
 
-    // ── 1. Allocate A4 slot & create frame ───────────────────
-    const slot = slotCounts[currentChatId] || 0
+    // Switch to Teaching page
+    const teachingPage = findPage(editor, PAGES.TEACHING)
+    if (teachingPage) editor.setCurrentPage(teachingPage.id)
+
+    // 1. Allocate A4 slot on Teaching page
+    const sk = slotKey(currentChatId, PAGES.TEACHING)
+    const slot = slotCounts[sk] || 0
     const pos = slotToXY(slot)
     const frameId = createShapeId()
 
@@ -240,12 +459,14 @@ export const useWhiteboardStore = create<WhiteboardStore>((set, get) => ({
       },
     })
 
-    // Advance slot
     set((s) => ({
-      slotCounts: { ...s.slotCounts, [currentChatId]: slot + 1 },
+      slotCounts: { ...s.slotCounts, [sk]: slot + 1 },
     }))
 
-    // ── 2. Build ActionPlayer with frame-aware callbacks ─────
+    // Auto-center on the new frame immediately
+    centerOnFrame(editor, frameId)
+
+    // 2. Build ActionPlayer
     const player = new ActionPlayer(scene, {
       onSubtitle: (text) => set({ currentSubtitle: text }),
       onPlaybackState: (ps) => set({ playbackState: ps }),
@@ -257,22 +478,12 @@ export const useWhiteboardStore = create<WhiteboardStore>((set, get) => ({
         const fontSize: string = isHeading ? 'xl' : isResult ? 'l' : 'm'
 
         const shapeId = createShapeId()
-
-        // ALL text inside frames uses autoSize:false + width for proper wrapping.
-        // This ensures content reflows when the user adjusts the frame.
         const shapeProps: Record<string, any> = {
           text: action.text,
           size: fontSize,
           font: 'sans',
-          // Always wrap: set width to fill the frame minus padding
           autoSize: false,
           w: A4.WIDTH - 2 * A4.PADDING,
-        }
-
-        // Headings get slightly narrower width and are still non-autoSize
-        // so they wrap if the frame is made smaller
-        if (isHeading) {
-          shapeProps.w = A4.WIDTH - 2 * A4.PADDING
         }
 
         editor.createShape({
@@ -289,13 +500,10 @@ export const useWhiteboardStore = create<WhiteboardStore>((set, get) => ({
 
       onComplete: () => {
         set({ activePlayer: null })
-        // Pan camera to show the new frame nicely
-        try {
-          editor.zoomToFit({ duration: 400 })
-        } catch {
-          // Some TLDraw versions use different API
-          try { editor.zoomToFit() } catch {}
-        }
+        // Auto-save after scene playback
+        setTimeout(() => get().saveSnapshot(get().currentChatId), 500)
+        // Re-center on the completed frame
+        centerOnFrame(editor, frameId)
       },
     })
 
@@ -303,7 +511,7 @@ export const useWhiteboardStore = create<WhiteboardStore>((set, get) => ({
     player.play()
   },
 
-  /* ── Media placement (right of A4 grid) ──────────────────── */
+  /* ── Media placement (Note Taking page for videos) ───────────── */
 
   placeYouTubeVideos: (ids) => {
     const { editor, placedMedia } = get()
@@ -324,7 +532,6 @@ export const useWhiteboardStore = create<WhiteboardStore>((set, get) => ({
           props: { videoId: id, w: 320, h: 200 },
         })
       } catch {
-        // YouTubeShapeUtil not registered — place as text link
         editor.createShape({
           id: createShapeId(),
           type: 'text',
@@ -378,24 +585,31 @@ export const useWhiteboardStore = create<WhiteboardStore>((set, get) => ({
     const { editor } = get()
     if (!editor) return
 
-    // Try to find an existing shape for this media
-    for (const id of editor.getCurrentPageShapeIds()) {
-      const shape = editor.getShape(id) as any
-      if (!shape) continue
+    // Search all pages for the media shape
+    const allPages = editor.getPages()
+    const originalPageId = editor.getCurrentPageId()
 
-      if (key.startsWith('yt-') && shape.type === 'youtube' && shape.props?.videoId === key.slice(3)) {
-        editor.select(shape.id)
-        try { editor.zoomToSelection({ duration: 300 }) } catch {}
-        return
-      }
-      if (key.startsWith('img-') && shape.type === 'text' && shape.props?.text?.includes(key.slice(4))) {
-        editor.select(shape.id)
-        try { editor.zoomToSelection({ duration: 300 }) } catch {}
-        return
+    for (const page of allPages) {
+      editor.setCurrentPage(page.id)
+      for (const id of editor.getCurrentPageShapeIds()) {
+        const shape = editor.getShape(id) as any
+        if (!shape) continue
+
+        if (key.startsWith('yt-') && shape.type === 'youtube' && shape.props?.videoId === key.slice(3)) {
+          editor.select(shape.id)
+          try { editor.zoomToSelection({ duration: 300 }) } catch {}
+          return
+        }
+        if (key.startsWith('img-') && shape.type === 'text' && shape.props?.text?.includes(key.slice(4))) {
+          editor.select(shape.id)
+          try { editor.zoomToSelection({ duration: 300 }) } catch {}
+          return
+        }
       }
     }
 
-    // Not found — place it
+    // Not found — restore original page, then place it
+    editor.setCurrentPage(originalPageId)
     if (key.startsWith('yt-')) {
       get().placeYouTubeVideos([key.slice(3)])
     } else if (key.startsWith('img-')) {
@@ -413,7 +627,6 @@ export const useWhiteboardStore = create<WhiteboardStore>((set, get) => ({
     if (shapeIds.length === 0) return null
 
     try {
-      // TLDraw v2.x export
       const svg = await editor.getSvg(shapeIds)
       if (!svg) return null
 

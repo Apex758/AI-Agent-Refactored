@@ -1,17 +1,15 @@
 'use client'
 import { useEffect, useRef, useCallback } from 'react'
 import { useChatStore } from '@/store/chatStore'
-import { useWhiteboardStore } from '@/store/whiteboardStore'
+import { useWhiteboardStore, PAGES } from '@/store/whiteboardStore'
 import { useUIStore } from '@/store/uiStore'
 import { cleanForTTS } from '@/utils/textCleaner'
 
 const WS_BASE = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000'
 
-/** Extract complete sentences from a streaming buffer.
- * Returns the sentences found plus any trailing text without terminal punctuation. */
+/** Extract complete sentences from a streaming buffer. */
 function extractSentences(buf: string): { sentences: string[]; remainder: string } {
   const sentences: string[] = []
-  // Match any text ending with .  !  or  ?  (with optional trailing whitespace)
   const re = /[^.!?]*[.!?]+\s*/g
   let match: RegExpExecArray | null
   let lastEnd = 0
@@ -35,15 +33,13 @@ export function useWebSocket(clientId: string, onSentence?: (text: string) => vo
   const messageQueueRef = useRef<string[]>([])
   const { appendStreaming, finalizeStreaming, setError, setCitations, addScrapedMedia } = useChatStore()
 
-  // Sentence-streaming TTS refs
   const onSentenceRef   = useRef(onSentence)
-  const streamBufferRef = useRef('')       // accumulates LLM tokens
-  const streamSpokenRef = useRef(false)    // true once ≥1 sentence was TTS'd this stream
+  const streamBufferRef = useRef('')
+  const streamSpokenRef = useRef(false)
 
   useEffect(() => { onSentenceRef.current = onSentence }, [onSentence])
   useEffect(() => { clientIdRef.current = clientId }, [clientId])
 
-  /** Flush complete sentences from the buffer; drain remainder on final call. */
   const flushSentences = (isFinal: boolean) => {
     if (!onSentenceRef.current) return
     const { sentences, remainder } = extractSentences(streamBufferRef.current)
@@ -92,18 +88,19 @@ export function useWebSocket(clientId: string, onSentence?: (text: string) => vo
             console.log('[DEBUG WS] Received media event:', { images: msg.images, videos: msg.videos })
             addScrapedMedia(msg.images ?? [], msg.videos ?? [])
             break
+
           case 'visual_plan': {
-            // Backend sent a structured diagram plan — build it on the whiteboard
+            // Backend sent a structured diagram plan → build on Teaching page
             if (msg.plan && msg.plan.visuals?.length) {
               console.log(`[ws] Visual plan received: ${msg.plan.topic} (${msg.plan.visuals.length} diagrams)`)
-              useWhiteboardStore.getState().buildVisualPlan(msg.plan)
+              const wb = useWhiteboardStore.getState()
+              wb.switchToPage(PAGES.TEACHING)
+              wb.buildVisualPlan(msg.plan)
             }
             break
           }
+
           case 'whiteboard_scene':
-            // FIX: Do NOT pre-synthesize here. ActionPlayer will call
-            // speakAndWait sequentially for each subtitle with a unique
-            // request_id so the correct audio plays for each subtitle.
             handleWhiteboardScene(msg.scene)
             break
         }
@@ -113,11 +110,9 @@ export function useWebSocket(clientId: string, onSentence?: (text: string) => vo
     }
 
     ws.onopen = () => {
-      // Reset sentence-streaming state for fresh connection
       streamBufferRef.current = ''
       streamSpokenRef.current = false
       setError(null)
-      // Drain any messages queued while the socket was connecting
       while (messageQueueRef.current.length > 0) {
         const queued = messageQueueRef.current.shift()!
         ws.send(JSON.stringify({ message: queued }))
@@ -143,17 +138,13 @@ export function useWebSocket(clientId: string, onSentence?: (text: string) => vo
     }
   }, [clientId])
 
-
-  // Helper to send TTS request and wait for audio playback to complete (Piper only).
-  // FIX: Uses a unique request_id so we only resolve when the MATCHING audio arrives,
-  // not some other subtitle's audio that happened to arrive first.
+  // TTS request + wait for playback
   const speakAndWait = useCallback((text: string): Promise<void> => {
     return new Promise((resolve) => {
       const ws = wsRef.current
       const clean = cleanForTTS(text)
       if (!clean) { resolve(); return }
 
-      // No open WebSocket — skip silently (Piper only, no browser fallback)
       if (!ws || ws.readyState !== WebSocket.OPEN) {
         resolve()
         return
@@ -169,14 +160,11 @@ export function useWebSocket(clientId: string, onSentence?: (text: string) => vo
         resolve()
       }
 
-      // 15-second safety timeout so ActionPlayer never hangs
       const timer = setTimeout(() => done(), 15000)
 
       const onMessage = (event: MessageEvent) => {
         try {
           const msg = JSON.parse(event.data)
-
-          // FIX: Only handle tts_audio with OUR request_id
           if (msg.type === 'tts_audio' && msg.request_id === requestId) {
             clearTimeout(timer)
             ws.removeEventListener('message', onMessage)
@@ -192,27 +180,24 @@ export function useWebSocket(clientId: string, onSentence?: (text: string) => vo
             audio.onerror = onDone
             audio.play().catch(() => onDone())
           } else if (msg.type === 'tts_error' && msg.request_id === requestId) {
-            // Piper failed for this request — resolve silently
             done()
           }
-        } catch (e) {
-          // Not our message, ignore
-        }
+        } catch (e) { /* not our message */ }
       }
 
       ws.addEventListener('message', onMessage)
-      // FIX: Include request_id so backend echoes it back
       ws.send(JSON.stringify({ type: 'tts', text: clean, request_id: requestId }))
     })
   }, [])
 
+  // Whiteboard scene → switch to Teaching page + whiteboard mode, then play
   const handleWhiteboardScene = useCallback((scene: any) => {
     if (!scene) return
-    // Switch to whiteboard mode
     useUIStore.getState().setMode('whiteboard')
-    // Small delay to let TLDraw mount, then play the scene
     setTimeout(() => {
-      useWhiteboardStore.getState().playScene(scene, speakAndWait)
+      const wb = useWhiteboardStore.getState()
+      wb.switchToPage(PAGES.TEACHING)
+      wb.playScene(scene, speakAndWait)
     }, 500)
   }, [speakAndWait])
   
@@ -220,7 +205,6 @@ export function useWebSocket(clientId: string, onSentence?: (text: string) => vo
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({ message }))
     } else {
-      // Queue the message — will be flushed in ws.onopen when the socket connects
       messageQueueRef.current.push(message)
     }
   }, [])

@@ -16,13 +16,10 @@ interface WhiteboardProps {
 export default function Whiteboard({ chatId }: WhiteboardProps) {
   const { setEditor, saveSnapshot, loadSnapshot, clearPlacedMedia } = useWhiteboardStore()
   
-  // Grab the editor instance from the store to pass to our reflow hook
   const editor = useWhiteboardStore((s) => s.editor)
-  
   const editorRef = useRef<Editor | null>(null)
   const prevChatIdRef = useRef<string>(chatId)
 
-  // Wire up frame reflow so resizing a frame automatically wraps text and scales diagrams
   useFrameReflow(editor)
 
   const handleMount = useCallback(
@@ -30,38 +27,52 @@ export default function Whiteboard({ chatId }: WhiteboardProps) {
       editorRef.current = mountedEditor
       setEditor(mountedEditor)
 
-      // Load existing snapshot for this chat
+      // loadSnapshot now also calls ensurePages() internally,
+      // so the four named pages are always created/verified here.
       loadSnapshot(chatId)
     },
     [chatId, setEditor, loadSnapshot],
   )
 
-  // When chatId changes, save current snapshot and load new one
+  // When chatId changes, save old snapshot and load new one.
+  // loadSnapshot handles clearing old shapes + ensuring pages.
   useEffect(() => {
     if (prevChatIdRef.current !== chatId && editorRef.current) {
-      // Save old
       saveSnapshot(prevChatIdRef.current)
-      // Clear placed media tracking for new chat
       clearPlacedMedia()
-      // Clear and load new
-      const currentEditor = editorRef.current
-      // Delete all shapes on current page before loading new snapshot
-      const allShapeIds = [...currentEditor.getCurrentPageShapeIds()]
-      if (allShapeIds.length > 0) {
-        currentEditor.deleteShapes(allShapeIds)
-      }
       loadSnapshot(chatId)
       prevChatIdRef.current = chatId
     }
   }, [chatId, saveSnapshot, loadSnapshot, clearPlacedMedia])
 
-  // Auto-save on unmount
+  // Auto-save on component unmount
   useEffect(() => {
     return () => {
       if (editorRef.current && prevChatIdRef.current) {
         saveSnapshot(prevChatIdRef.current)
       }
     }
+  }, [saveSnapshot])
+
+  // Save whiteboard on page unload (refresh / close tab)
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      if (editorRef.current && prevChatIdRef.current) {
+        saveSnapshot(prevChatIdRef.current)
+      }
+    }
+    window.addEventListener('beforeunload', handleBeforeUnload)
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload)
+  }, [saveSnapshot])
+
+  // Periodic auto-save every 10 seconds
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (editorRef.current && prevChatIdRef.current) {
+        saveSnapshot(prevChatIdRef.current)
+      }
+    }, 10_000)
+    return () => clearInterval(interval)
   }, [saveSnapshot])
 
   return (
