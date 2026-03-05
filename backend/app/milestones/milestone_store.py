@@ -64,6 +64,7 @@ class Milestone:
     def to_dict(self) -> dict:
         d = asdict(self)
         d["status"] = self.status.value
+        d["recent_accuracy"] = self.recent_accuracy
         return d
 
     @classmethod

@@ -60,6 +60,7 @@ class Gateway:
         self._personality = None
         self._breakdown_prompt = None
         self._teaching_prompt = None
+        self._diagram_for_milestone: dict[str, str] = {}
 
     # ── Prompt file loaders ─────────────────────────────────
 
@@ -155,6 +156,17 @@ class Gateway:
             return None
         return f"{plan.topic}: {current.title} - {current.description}"
 
+
+    def _get_current_milestone_id(self, chat_id: str) -> Optional[str]:
+        """Get the milestone_id of the current active milestone."""
+        store = get_milestone_store()
+        plans = store.list_plans_for_chat(chat_id)
+        if not plans:
+            return None
+        current = plans[0].current_milestone()
+        if not current:
+            return None
+        return current.milestone_id
     # ── Visual planning ─────────────────────────────────────
 
     async def _generate_visual_plan(self, message: str, chat_id: str = "") -> Tuple[str, Optional[dict]]:
@@ -264,22 +276,40 @@ class Gateway:
         elif phase == "teaching":
             logger.info(f"[gateway] TEACHING phase → using SMALL model")
 
-        # ── Visual planning: during teaching phase ALWAYS ──
-        # FIX: removed the `and LEARN_RE.search(message)` condition
-        # so diagrams are generated even when user says "yes/ready/go"
+  
+        # ── Visual planning: only when milestone changes ──
         visual_context = ""
         visual_plan_dict = None
 
         if phase == "teaching":
-            visual_context, visual_plan_dict = await self._generate_visual_plan(
-                message, chat_id=client_id
-            )
+            # Check if the current milestone already has a diagram
+            current_milestone_id = self._get_current_milestone_id(client_id)
+            prev_milestone_id = self._diagram_for_milestone.get(client_id)
 
-            if visual_plan_dict:
-                yield {
-                    "type": "visual_plan",
-                    "plan": visual_plan_dict,
-                }
+            if current_milestone_id and current_milestone_id != prev_milestone_id:
+                # New milestone — generate a fresh diagram
+                visual_context, visual_plan_dict = await self._generate_visual_plan(
+                    message, chat_id=client_id
+                )
+
+                if visual_plan_dict:
+                    self._diagram_for_milestone[client_id] = current_milestone_id
+                    logger.info(f"[gateway] New diagram for milestone {current_milestone_id}")
+                    yield {
+                        "type": "visual_plan",
+                        "plan": visual_plan_dict,
+                    }
+                else:
+                    # Plan generation failed, still inject context if we have the topic
+                    milestone_topic = self._get_current_milestone_topic(client_id)
+                    if milestone_topic:
+                        visual_context = f"\nCurrent lesson topic: {milestone_topic}\n"
+            else:
+                # Same milestone — reuse existing diagram context without generating new one
+                milestone_topic = self._get_current_milestone_topic(client_id)
+                if milestone_topic:
+                    visual_context = f"\nCurrent lesson topic: {milestone_topic}\nThe diagram is already visible to the student.\n"
+                logger.info(f"[gateway] Skipping diagram — same milestone {current_milestone_id}")
 
         # ── Build prompt with phase-appropriate instructions ──
         system_prompt = self._build_system_prompt(
