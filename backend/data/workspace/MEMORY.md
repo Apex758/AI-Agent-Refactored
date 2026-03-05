@@ -6,6 +6,33 @@
 
 ## Important Facts
 
+- User requests pictures
+
+
+- User requests videos
+
+
+- User likes cows
+
+
+- User likes ducks
+
+
+- User likes cats
+
+
+- User likes ducks
+
+
+- User likes cows
+
+
+- Assistant provided a picture of a duck
+
+
+- User wants a picture of a duck
+
+
 - User wants videos of trees
 
 

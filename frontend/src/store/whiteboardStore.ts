@@ -614,9 +614,8 @@ export const useWhiteboardStore = create<WhiteboardStore>((set, get) => ({
     const { editor } = get()
     if (!editor) return
 
+    // 1. Search all pages for an existing shape with this key
     const allPages = editor.getPages()
-    const originalPageId = editor.getCurrentPageId()
-
     for (const page of allPages) {
       editor.setCurrentPage(page.id)
       for (const id of editor.getCurrentPageShapeIds()) {
@@ -625,10 +624,9 @@ export const useWhiteboardStore = create<WhiteboardStore>((set, get) => ({
 
         if (key.startsWith('yt-') && shape.type === 'youtube' && shape.props?.videoId === key.slice(3)) {
           editor.select(shape.id)
-          try { editor.zoomToSelection({ duration: 300 }) } catch {}
+          try { editor.zoomToSelection() } catch {}
           return
         }
-        // Match image shapes by asset URL or text fallback
         if (key.startsWith('img-')) {
           const targetUrl = key.slice(4)
           if (
@@ -637,18 +635,65 @@ export const useWhiteboardStore = create<WhiteboardStore>((set, get) => ({
             (shape.type === 'text' && shape.props?.text?.includes(targetUrl.slice(0, 40)))
           ) {
             editor.select(shape.id)
-            try { editor.zoomToSelection({ duration: 300 }) } catch {}
+            try { editor.zoomToSelection() } catch {}
             return
           }
         }
       }
     }
 
-    editor.setCurrentPage(originalPageId)
+    // 2. Shape not found (was deleted or never placed) — clear stale entry and place fresh
+    set(s => {
+      const newPlaced = { ...s.placedMedia }
+      delete newPlaced[key]
+      return { placedMedia: newPlaced }
+    })
+
+    // Switch to Note Taking page for placement
+    const noteTakingPage = findPage(editor, PAGES.NOTE_TAKING)
+    if (noteTakingPage) editor.setCurrentPage(noteTakingPage.id)
+
+    const count = get().mediaCount
+    let newShapeId: TLShapeId | null = null
+
     if (key.startsWith('yt-')) {
-      get().placeYouTubeVideos([key.slice(3)])
+      const videoId = key.slice(3)
+      const shapeId = createShapeId()
+      newShapeId = shapeId
+      try {
+        editor.createShape({
+          id: shapeId,
+          type: 'youtube' as any,
+          x: 100,
+          y: count * MEDIA_AREA.STEP,
+          props: { videoId, w: 320, h: 200 },
+        })
+      } catch {
+        editor.createShape({
+          id: shapeId,
+          type: 'text',
+          x: 100,
+          y: count * MEDIA_AREA.STEP,
+          props: { text: `▶ youtube.com/watch?v=${videoId}`, size: 's', autoSize: true },
+        })
+      }
     } else if (key.startsWith('img-')) {
-      get().placeScrapedMedia([key.slice(4)], [])
+      const url = key.slice(4)
+      newShapeId = placeImageOnBoard(editor, url, 100, count * MEDIA_AREA.STEP, 400, 300)
+    }
+
+    if (newShapeId) {
+      set(s => ({
+        placedMedia: { ...s.placedMedia, [key]: true },
+        mediaCount: s.mediaCount + 1,
+      }))
+      const sid = newShapeId
+      setTimeout(() => {
+        try {
+            editor.select(sid!)
+            editor.zoomToSelection()
+          } catch {}
+      }, 100)
     }
   },
 

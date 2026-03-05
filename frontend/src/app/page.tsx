@@ -874,10 +874,7 @@ export default function Home() {
                             media={msg.media}
                             onOpen={(key) => {
                               setMode('whiteboard')
-                              if (key.startsWith('yt-')) {
-                                switchToPage(PAGES.NOTE_TAKING)
-                              }
-                              setTimeout(() => focusOrPlaceMedia(key), 250)
+                              setTimeout(() => focusOrPlaceMedia(key), 300)
                             }}
                           />
                         </div>
