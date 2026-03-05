@@ -7,23 +7,9 @@ import { cleanForTTS } from '@/utils/textCleaner'
 
 const WS_BASE = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000'
 
-/** Extract complete sentences from a streaming buffer. */
-function extractSentences(buf: string): { sentences: string[]; remainder: string } {
-  const sentences: string[] = []
-  const re = /[^.!?]*[.!?]+\s*/g
-  let match: RegExpExecArray | null
-  let lastEnd = 0
-  while ((match = re.exec(buf)) !== null) {
-    const s = match[0].trim()
-    if (s.length > 2) sentences.push(s)
-    lastEnd = re.lastIndex
-  }
-  return { sentences, remainder: buf.slice(lastEnd) }
-}
-
 /**
  * Browser TTS speak-and-wait: returns a Promise that resolves when the
- * utterance finishes. Uses the same voice as useVoice (first English voice).
+ * utterance finishes. Used by subtitle playback only.
  */
 function browserSpeakAndWait(text: string): Promise<void> {
   return new Promise((resolve) => {
@@ -54,42 +40,13 @@ function browserSpeakAndWait(text: string): Promise<void> {
   })
 }
 
-export function useWebSocket(clientId: string, onSentence?: (text: string) => void) {
+export function useWebSocket(clientId: string) {
   const wsRef = useRef<WebSocket | null>(null)
   const clientIdRef = useRef(clientId)
   const messageQueueRef = useRef<string[]>([])
   const { appendStreaming, finalizeStreaming, setError, setCitations, addScrapedMedia } = useChatStore()
 
-  const onSentenceRef      = useRef(onSentence)
-  const streamBufferRef    = useRef('')
-  const streamSpokenRef    = useRef(false)
-
-  /**
-   * When a visual_plan arrives (before tokens), we know a whiteboard scene
-   * will follow. Suppress streaming sentence TTS so only the scene's
-   * subtitles speak — prevents hearing the same content twice.
-   */
-  const sceneExpectedRef   = useRef(false)
-
-  useEffect(() => { onSentenceRef.current = onSentence }, [onSentence])
   useEffect(() => { clientIdRef.current = clientId }, [clientId])
-
-  const flushSentences = (isFinal: boolean) => {
-    if (!onSentenceRef.current) return
-    // If a scene is expected, skip streaming TTS — scene subtitles will handle it
-    if (sceneExpectedRef.current) return
-
-    const { sentences, remainder } = extractSentences(streamBufferRef.current)
-    sentences.forEach(s => {
-      onSentenceRef.current!(s)
-      streamSpokenRef.current = true
-    })
-    if (isFinal && remainder.trim().length > 2) {
-      onSentenceRef.current(remainder.trim())
-      streamSpokenRef.current = true
-    }
-    streamBufferRef.current = isFinal ? '' : remainder
-  }
 
   const connect = useCallback((id: string) => {
     if (wsRef.current) {
@@ -108,21 +65,15 @@ export function useWebSocket(clientId: string, onSentence?: (text: string) => vo
         switch (msg.type) {
           case 'token':
             appendStreaming(msg.content)
-            streamBufferRef.current += msg.content
-            flushSentences(false)
             break
           case 'complete':
-            flushSentences(true)
             finalizeStreaming()
-            // Reset scene flag after response completes
-            sceneExpectedRef.current = false
             break
           case 'citations':
             setCitations(msg.citations || [])
             break
           case 'error':
             setError(msg.content)
-            sceneExpectedRef.current = false
             break
           case 'media':
             addScrapedMedia(msg.images ?? [], msg.videos ?? [])
@@ -130,10 +81,7 @@ export function useWebSocket(clientId: string, onSentence?: (text: string) => vo
 
           case 'visual_plan': {
             if (msg.plan && msg.plan.visuals?.length) {
-              console.log(`[ws] Visual plan received — suppressing streaming TTS`)
-              // Signal: a scene will follow, suppress streaming sentence TTS
-              sceneExpectedRef.current = true
-
+              console.log(`[ws] Visual plan received`)
               const wb = useWhiteboardStore.getState()
               wb.switchToPage(PAGES.TEACHING)
               wb.buildVisualPlan(msg.plan)
@@ -151,9 +99,6 @@ export function useWebSocket(clientId: string, onSentence?: (text: string) => vo
     }
 
     ws.onopen = () => {
-      streamBufferRef.current = ''
-      streamSpokenRef.current = false
-      sceneExpectedRef.current = false
       setError(null)
       while (messageQueueRef.current.length > 0) {
         const queued = messageQueueRef.current.shift()!
@@ -180,11 +125,11 @@ export function useWebSocket(clientId: string, onSentence?: (text: string) => vo
     }
   }, [clientId])
 
-  // Whiteboard scene → kill any leftover streaming speech, switch to board, play scene
+  // Whiteboard scene → kill any leftover speech, switch to board, play scene subtitles
   const handleWhiteboardScene = useCallback((scene: any) => {
     if (!scene) return
 
-    // Cancel any in-progress browser TTS (leftover streaming sentences)
+    // Cancel any in-progress browser TTS
     if (typeof window !== 'undefined' && window.speechSynthesis) {
       window.speechSynthesis.cancel()
     }
@@ -193,7 +138,7 @@ export function useWebSocket(clientId: string, onSentence?: (text: string) => vo
     setTimeout(() => {
       const wb = useWhiteboardStore.getState()
       wb.switchToPage(PAGES.TEACHING)
-      // Scene subtitles will speak via browserSpeakAndWait (same male voice)
+      // Scene subtitles speak via browserSpeakAndWait
       wb.playScene(scene, browserSpeakAndWait)
     }, 500)
   }, [])
@@ -206,5 +151,5 @@ export function useWebSocket(clientId: string, onSentence?: (text: string) => vo
     }
   }, [])
 
-  return { send, streamSpokenRef }
+  return { send }
 }

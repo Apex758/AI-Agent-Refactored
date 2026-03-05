@@ -76,6 +76,21 @@ class ConnectionManager:
 ws_manager = ConnectionManager()
 
 
+def _has_active_milestone_plan(client_id: str) -> bool:
+    """Check if this chat has an active (non-completed) milestone plan."""
+    try:
+        from app.milestones.milestone_store import get_milestone_store
+        store = get_milestone_store()
+        plans = store.list_plans_for_chat(client_id)
+        if plans:
+            plan = plans[0]
+            # Active if there's a current milestone (not all mastered)
+            return plan.current_milestone() is not None
+    except Exception:
+        pass
+    return False
+
+
 @router.websocket("/ws/{client_id}")
 async def websocket_chat(ws: WebSocket, client_id: str):
     await ws_manager.connect(client_id, ws)
@@ -89,7 +104,7 @@ async def websocket_chat(ws: WebSocket, client_id: str):
             # Handle TTS requests directly in this WebSocket
             if msg.get("type") == "tts":
                 text = msg.get("text", "")
-                request_id = msg.get("request_id", "")  # <-- NEW
+                request_id = msg.get("request_id", "")
                 if text:
                     try:
                         from app.tts.speech_service import speech_service
@@ -100,14 +115,14 @@ async def websocket_chat(ws: WebSocket, client_id: str):
                             "type": "tts_audio",
                             "audio": audio_b64,
                             "format": "wav",
-                            "request_id": request_id,  # <-- NEW: echo back
+                            "request_id": request_id,
                         })
                     except Exception as e:
                         logger.error(f"TTS failed: {e}")
                         await ws_manager.send(client_id, {
                             "type": "tts_error",
                             "message": str(e),
-                            "request_id": request_id,  # <-- NEW: echo back
+                            "request_id": request_id,
                         })
                 continue
             
@@ -132,13 +147,12 @@ async def websocket_chat(ws: WebSocket, client_id: str):
                             "videos": event.get("videos", []),
                         })
                     
-                    # ── NEW: Visual plan for DiagramBuilder ──────────
+                    # ── Visual plan for DiagramBuilder ──────────
                     elif event["type"] == "visual_plan":
                         await ws_manager.send(client_id, {
                             "type": "visual_plan",
                             "plan": event["plan"],
                         })
-                    # ── END NEW ──────────────────────────────────────
                     
                     elif event["type"] == "token":
                         full_response += event["content"]
@@ -147,27 +161,20 @@ async def websocket_chat(ws: WebSocket, client_id: str):
                 await ws_manager.send(client_id, {"type": "complete", "content": full_response})
 
                 # ── Whiteboard scene (teaching mode) ──
-                # Trigger on user learning keywords OR when the response itself
-                # contains lesson/milestone content (e.g. after "Yes. Begin.")
-                import re
-                LEARNING_RE = re.compile(
-                    r'\b(learn|teach|explain|study|understand|how does|what is|walk me through)\b',
-                    re.IGNORECASE,
-                )
-                RESPONSE_LESSON_RE = re.compile(
-                    r'\b(milestone|stage|lesson|exposure|practice|caterpillar|evaporation|metamorphosis)\b'
-                    r'|\*\*Milestone\b',
-                    re.IGNORECASE,
-                )
+                # FIX: Instead of fragile regex, check if there's an active
+                # milestone plan. If yes, ALWAYS generate subtitles for
+                # substantive responses (>150 chars). This ensures subtitles
+                # appear whether the user typed, spoke, or said "yes".
+                has_active_plan = _has_active_milestone_plan(client_id)
+                
                 should_generate_scene = bool(
-                    full_response and 
-                    len(full_response) > 200 and    (
-                        LEARNING_RE.search(user_message) or
-                        RESPONSE_LESSON_RE.search(full_response)
-                    )
+                    full_response and
+                    len(full_response) > 150 and
+                    has_active_plan
                 )
+
                 if should_generate_scene:
-                    # Fire-and-forget: process_teaching adds ~2s LLM round-trip, don't block TTS
+                    logger.info(f"[routes] Generating whiteboard scene (active plan, response={len(full_response)} chars)")
                     async def send_scene():
                         scene = await gateway.process_teaching(full_response, user_message, client_id)
                         if scene:
@@ -259,4 +266,4 @@ async def health():
         "status": "ok",
         "agent": get_gateway().get_personality()[:100],
         "tools": len(get_tool_registry().list_tools()),
-    }
+    }   

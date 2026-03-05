@@ -123,6 +123,49 @@ function CitationBadge({ citation }: { citation: Citation }) {
   )
 }
 
+// ── Per-message speaker button ────────────────────────────────────
+function SpeakButton({ text, voice }: { text: string; voice: { speak: (t: string) => void; stopSpeaking: () => void; isSpeaking: boolean } }) {
+  const [playing, setPlaying] = useState(false)
+
+  const handleClick = () => {
+    if (playing || voice.isSpeaking) {
+      voice.stopSpeaking()
+      setPlaying(false)
+    } else {
+      // Stop any current speech first, then speak this message
+      voice.stopSpeaking()
+      setTimeout(() => {
+        voice.speak(text)
+        setPlaying(true)
+      }, 50)
+    }
+  }
+
+  // Reset playing state when speech stops externally
+  useEffect(() => {
+    if (!voice.isSpeaking && playing) {
+      setPlaying(false)
+    }
+  }, [voice.isSpeaking, playing])
+
+  return (
+    <button
+      onClick={handleClick}
+      className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs transition-all hover:opacity-80"
+      style={{
+        background: playing ? 'var(--gold-muted)' : 'transparent',
+        border: `1px solid ${playing ? 'var(--gold-border)' : 'var(--border)'}`,
+        color: playing ? 'var(--seal-brown)' : 'var(--text-muted)',
+        cursor: 'pointer',
+      }}
+      title={playing ? 'Stop speaking' : 'Read aloud'}
+    >
+      <Icon name={playing ? 'stop' : 'speaker'} size={14} />
+      {playing ? 'Stop' : 'Listen'}
+    </button>
+  )
+}
+
 // ── Scraped media card ────────────────────────────────────────────
 function MediaCard({ media }: { media: ScrapedMedia }) {
   const hasImages = media.images.length > 0
@@ -265,8 +308,8 @@ function DocumentPanel({
 }
 
 // ── Voice indicator ───────────────────────────────────────────────
-function VoiceOrb({ isListening, isSpeaking }: { isListening: boolean; isSpeaking: boolean }) {
-  if (!isListening && !isSpeaking) return null
+function VoiceOrb({ isListening }: { isListening: boolean }) {
+  if (!isListening) return null
   return (
     <div className="fixed bottom-24 left-1/2 -translate-x-1/2 z-50 flex flex-col items-center gap-2 pointer-events-none">
       <div className="relative flex items-center justify-center" style={{ width: 64, height: 64 }}>
@@ -277,7 +320,7 @@ function VoiceOrb({ isListening, isSpeaking }: { isListening: boolean; isSpeakin
             style={{
               width: 64 + i * 20,
               height: 64 + i * 20,
-              border: `2px solid ${isListening ? 'rgba(220,60,60,.4)' : 'rgba(196,178,94,.35)'}`,
+              border: `2px solid rgba(220,60,60,.4)`,
               animation: `pulse-ring 1.5s ease-out ${i * 0.4}s infinite`,
             }}
           />
@@ -285,24 +328,24 @@ function VoiceOrb({ isListening, isSpeaking }: { isListening: boolean; isSpeakin
         <div
           className="relative w-14 h-14 rounded-full flex items-center justify-center text-2xl"
           style={{
-            background: isListening ? 'rgba(200,50,50,.9)' : 'rgba(196,178,94,.85)',
+            background: 'rgba(200,50,50,.9)',
             backdropFilter: 'blur(8px)',
-            boxShadow: isListening ? '0 0 20px rgba(220,60,60,.5)' : '0 0 20px rgba(196,178,94,.4)',
+            boxShadow: '0 0 20px rgba(220,60,60,.5)',
           }}
         >
-          {isListening ? <Icon name="microphone" size={18} /> : <Icon name="speaker" size={18} />}
+          <Icon name="microphone" size={18} />
         </div>
       </div>
       <p
         className="text-xs font-medium rounded-full px-3 py-1"
         style={{
           background: 'rgba(42,26,16,.7)',
-          color: isListening ? 'rgba(255,130,120,1)' : 'var(--vegas-gold)',
+          color: 'rgba(255,130,120,1)',
           backdropFilter: 'blur(8px)',
           border: '1px solid rgba(255,255,255,.08)',
         }}
       >
-        {isListening ? 'Listening…' : 'Speaking…'}
+        Listening…
       </p>
       <style>{`
         @keyframes pulse-ring {
@@ -394,43 +437,12 @@ export default function Home() {
   const currentMessages  = currentChatId ? (messagesByChatId[currentChatId] || []) : []
   const currentDocuments = currentChatId ? (documentsByChatId[currentChatId] || []) : []
 
-  const voiceSpeakRef      = useRef<((text: string) => void) | undefined>(undefined)
-  const voiceEnabledRef    = useRef(false)
-  const onSentenceCallback = useCallback((text: string) => {
-    if (voiceEnabledRef.current) voiceSpeakRef.current?.(text)
-  }, [])
+  // useWebSocket — no streaming TTS, only handles tokens/scenes
+  const { send } = useWebSocket(currentChatId || '')
 
-  const { send, streamSpokenRef } = useWebSocket(currentChatId || '', onSentenceCallback)
-
-  const [input, setInput]                 = useState('')
-  const [showMemory, setShowMemory]       = useState(false)
-  const [memoryContent, setMemoryContent] = useState('')
-  const [editingChatId, setEditingChatId] = useState<string | null>(null)
-  const [editName, setEditName]           = useState('')
-  const [sidebarOpen, setSidebarOpen]     = useState(false)
-  const [docPanelOpen, setDocPanelOpen]   = useState(false)
-  const [uploadError, setUploadError]     = useState<string | null>(null)
-  const [voiceEnabled, setVoiceEnabled]   = useState(false)
-  voiceEnabledRef.current = voiceEnabled
-
-  const bottomRef    = useRef<HTMLDivElement>(null)
-  const editInputRef = useRef<HTMLInputElement>(null)
-  const lastSpokenId = useRef<string | null>(null)
-  const callbackRef  = useRef<(text: string) => void>(() => {})
-  const wasSpeakingRef = useRef(false)
-
-  // auto-collapse panels when switching to board
-  useEffect(() => {
-    if (mode === 'whiteboard') {
-      setSidebarOpen(false)
-      setDocPanelOpen(false)
-    }
-  }, [mode])
-
-  // ── Voice ──────────────────────────────────────────────────────
+  // Voice hook — used for STT (mic input) and on-demand per-message TTS
+  const callbackRef = useRef<(text: string) => void>(() => {})
   const voice = useVoice(useCallback((text: string) => callbackRef.current(text), []))
-
-  useEffect(() => { voiceSpeakRef.current = voice.speak }, [voice.speak])
 
   useEffect(() => {
     callbackRef.current = (text: string) => {
@@ -441,39 +453,30 @@ export default function Home() {
     }
   }, [currentChatId, isProcessing, sendMessage, send])
 
-  useEffect(() => {
-    if (!voiceEnabled) return
-    const last = currentMessages[currentMessages.length - 1]
-    if (last?.role === 'assistant' && last.id !== lastSpokenId.current) {
-      lastSpokenId.current = last.id
-      if (streamSpokenRef.current) {
-        streamSpokenRef.current = false
-        return
-      }
-      voice.speak(last.content)
-    }
-  }, [currentMessages, voiceEnabled, voice])
+  const [input, setInput]                 = useState('')
+  const [showMemory, setShowMemory]       = useState(false)
+  const [memoryContent, setMemoryContent] = useState('')
+  const [editingChatId, setEditingChatId] = useState<string | null>(null)
+  const [editName, setEditName]           = useState('')
+  const [sidebarOpen, setSidebarOpen]     = useState(false)
+  const [docPanelOpen, setDocPanelOpen]   = useState(false)
+  const [uploadError, setUploadError]     = useState<string | null>(null)
 
+  const bottomRef    = useRef<HTMLDivElement>(null)
+  const editInputRef = useRef<HTMLInputElement>(null)
+
+  // auto-collapse panels when switching to board
+  useEffect(() => {
+    if (mode === 'whiteboard') {
+      setSidebarOpen(false)
+      setDocPanelOpen(false)
+    }
+  }, [mode])
+
+  // Show interim STT text in input
   useEffect(() => {
     if (voice.interimText) setInput(voice.interimText)
   }, [voice.interimText])
-
-  // ── Auto-listen after AI finishes answering with a question ──
-  useEffect(() => {
-    const wasSpeaking = wasSpeakingRef.current
-    wasSpeakingRef.current = voice.isSpeaking
-    if (!wasSpeaking || voice.isSpeaking) return
-    if (!voiceEnabled || voice.isListening || isProcessing) return
-    const last = currentMessages[currentMessages.length - 1]
-    if (last?.role === 'assistant' && /\?\s*$/.test(last.content.trim())) {
-      const timer = setTimeout(() => {
-        if (!voice.isListening && !voice.isSpeaking) {
-          voice.startListening()
-        }
-      }, 800)
-      return () => clearTimeout(timer)
-    }
-  }, [voice.isSpeaking, voiceEnabled, voice.isListening, isProcessing, currentMessages])
 
   // ── Auto-place YouTube videos on the whiteboard ────────────────
   useEffect(() => {
@@ -589,7 +592,6 @@ export default function Home() {
     } else if (voice.isSpeaking) {
       voice.stopSpeaking()
     } else {
-      setVoiceEnabled(true)
       voice.startListening()
     }
   }
@@ -676,7 +678,7 @@ export default function Home() {
         />
       )}
 
-      <VoiceOrb isListening={voice.isListening} isSpeaking={voice.isSpeaking} />
+      <VoiceOrb isListening={voice.isListening} />
 
       {/* Left sidebar */}
       <aside
@@ -837,13 +839,20 @@ export default function Home() {
                         <MessageContent content={msg.content} />
                       </div>
                       {msg.media && <MediaCard media={msg.media} />}
+
+                      {/* Speaker button — only on assistant messages */}
+                      {msg.role === 'assistant' && (
+                        <div className="flex flex-wrap gap-1.5 mt-1 max-w-[78%]">
+                          <SpeakButton text={msg.content} voice={voice} />
+                        </div>
+                      )}
+
                       {msg.role === 'assistant' && (
                         <BoardLinkChips
                           content={msg.content}
                           media={msg.media}
                           onOpen={(key) => {
                             setMode('whiteboard')
-                            // Route videos → Note Taking page; images stay on current page
                             if (key.startsWith('yt-')) {
                               switchToPage(PAGES.NOTE_TAKING)
                             }
@@ -962,26 +971,6 @@ export default function Home() {
                     }}
                   >
                     {voice.isListening ? <Icon name="stop" size={18} /> : voice.isSpeaking ? <Icon name="speaker" size={18} /> : <Icon name="microphone" size={18} />}
-                  </button>
-                )}
-
-                {voice.supported && currentChatId && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const next = !voiceEnabled
-                      setVoiceEnabled(next)
-                      if (!next) voice.stopSpeaking()
-                    }}
-                    className="flex-shrink-0 w-11 h-11 flex items-center justify-center rounded-xl transition-all text-xs font-semibold"
-                    title={voiceEnabled ? 'Disable auto-speak' : 'Enable auto-speak'}
-                    style={{
-                      background: voiceEnabled ? 'var(--gold-muted)' : 'var(--bg-raised)',
-                      border: `1.5px solid ${voiceEnabled ? 'var(--gold-border)' : 'var(--border-strong)'}`,
-                      color: voiceEnabled ? 'var(--seal-brown)' : 'var(--text-muted)',
-                    }}
-                  >
-                    {voiceEnabled ? <Icon name="speaker-low" size={18} /> : <Icon name="speaker-mute" size={18} />}
                   </button>
                 )}
 

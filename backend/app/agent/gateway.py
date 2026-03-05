@@ -321,6 +321,8 @@ class Gateway:
             "Rules:\n"
             "- Split the explanation into 3-8 subtitles. Each subtitle is ONE complete sentence shown alone on screen.\n"
             "- Subtitles will be displayed ONE AT A TIME (not word by word). Keep each concise and self-contained.\n"
+            "- CRITICAL: The LAST subtitle MUST be the final question or suggestion from the explanation. Never skip the closing question.\n"
+            "- If the explanation ends with a question, the last subtitle must be that question (you may rephrase it but it MUST remain a question ending with ?).\n"
             "- For each subtitle that introduces a key concept, create a matching whiteboard action.\n"
             "- Whiteboard shows ONLY short labels and key facts. Subtitles handle the spoken explanations.\n"
             "- ALL text must be CLEAN: no markdown (no **, ##, `, ---), no emoji, no special symbols.\n"

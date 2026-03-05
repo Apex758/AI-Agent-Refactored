@@ -372,6 +372,13 @@ class ToolRegistry:
             if not current:
                 return {"message": "All milestones already mastered!", "plan_id": plan.plan_id}
 
+            from app.milestones.milestone_store import MilestoneStatus
+            if current.status == MilestoneStatus.AVAILABLE:
+                current.status = MilestoneStatus.IN_PROGRESS
+                if current.started_at == 0.0:
+                    import time
+                    current.started_at = time.time()
+
             current.record_check(correct)
             advanced = False
             if current.check_mastery():
