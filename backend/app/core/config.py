@@ -38,6 +38,9 @@ class Settings(BaseSettings):
     memory_workspace: str = "./data/workspace"
     embedding_provider: str = "openai"
 
+    # Unsplash
+    unsplash_access_key: Optional[str] = None
+
     # Retrieval
     retrieval_top_k: int = 5
     max_tool_calls: int = 10

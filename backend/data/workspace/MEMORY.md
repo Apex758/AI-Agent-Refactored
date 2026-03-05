@@ -6,6 +6,60 @@
 
 ## Important Facts
 
+- User wants videos of cars
+
+
+- User wants pictures of cars
+
+
+- User likes cars
+
+
+- User wants a picture of a car
+
+
+- User was provided with an image of a car
+
+
+- User likes images from Unsplash/Wikimedia
+
+
+- User likes videos of forests
+
+
+- User likes pictures of forests
+
+
+- User likes videos of goats
+
+
+- User likes pictures of goats
+
+
+- User likes pictures of dogs
+
+
+- User likes videos of forests
+
+
+- User likes pictures of forests
+
+
+- User likes videos of goats
+
+
+- User likes pictures of goats
+
+
+- User likes pictures of dogs
+
+
+- User wants a video of a goat
+
+
+- User wants a picture of a goat
+
+
 - User wants a picture of a car
 
 

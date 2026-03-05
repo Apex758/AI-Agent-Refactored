@@ -58,10 +58,9 @@ class ToolRegistry:
         self.register(Tool(
             name="web_search",
             description=(
-                "Search the web for current information, images, videos, and more. "
-                "Use this when the user asks for pictures, photos, videos, or any current information. "
-                "For images, search on sites like unsplash.com, pexels.com, or pixabay.com. "
-                "For videos, search YouTube. Then use web_fetch on the results to get actual media URLs."
+                "Search the web for current information and text content. "
+                "For images, use the get_image tool instead (more reliable). "
+                "For videos, search YouTube and use web_fetch to get video IDs."
             ),
             parameters={"type": "object", "properties": {
                 "query": {"type": "string", "description": "Search query"},
@@ -82,6 +81,20 @@ class ToolRegistry:
                 "url": {"type": "string", "description": "URL to fetch"},
             }, "required": ["url"]},
             handler=self._web_fetch,
+        ))
+
+        self.register(Tool(
+            name="get_image",
+            description=(
+                "Get a random image from Unsplash or Wikimedia Commons. "
+                "Use this when the user asks for pictures, photos, or images. "
+                "Provide a search query to find relevant images. "
+                "Returns the image URL, photographer credit, and attribution links."
+            ),
+            parameters={"type": "object", "properties": {
+                "query": {"type": "string", "description": "Search query for the image (e.g., 'goat', 'landscape', 'cat')"},
+            }, "required": ["query"]},
+            handler=self._get_image,
         ))
 
         self.register(Tool(
@@ -367,6 +380,97 @@ class ToolRegistry:
                 return {"error": f"Fetch failed: {resp.status_code}"}
         except Exception as e:
             return {"error": str(e)}
+
+    async def _get_image(self, query: str) -> Dict:
+        """Get a random image from Unsplash API, with Wikimedia Commons fallback."""
+        from app.core.config import settings
+        
+        # Try Unsplash first
+        unsplash_key = settings.unsplash_access_key
+        if unsplash_key:
+            try:
+                async with httpx.AsyncClient() as client:
+                    resp = await client.get(
+                        "https://api.unsplash.com/photos/random",
+                        params={"query": query, "orientation": "landscape"},
+                        headers={"Authorization": f"Client-ID {unsplash_key}"},
+                        timeout=15,
+                    )
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        return {
+                            "image_url": data["urls"]["regular"],
+                            "thumb_url": data["urls"]["thumb"],
+                            "full_url": data["urls"]["full"],
+                            "page_url": data["links"]["html"],
+                            "photographer": data["user"]["name"],
+                            "photographer_url": data["user"]["links"]["html"],
+                            "source": "Unsplash",
+                            "query": query,
+                        }
+                    elif resp.status_code == 401:
+                        logger.warning("Unsplash API key invalid")
+                    else:
+                        logger.warning(f"Unsplash API error: {resp.status_code}")
+            except Exception as e:
+                logger.warning(f"Unsplash API failed: {e}")
+        
+        # Fallback to Wikimedia Commons
+        try:
+            async with httpx.AsyncClient() as client:
+                # Search Wikimedia Commons API
+                search_resp = await client.get(
+                    "https://commons.wikimedia.org/w/api.php",
+                    params={
+                        "action": "query",
+                        "list": "search",
+                        "srsearch": query,
+                        "srnamespace": 6,  # File namespace
+                        "srlimit": 10,
+                        "format": "json",
+                    },
+                    timeout=15,
+                )
+                if search_resp.status_code == 200:
+                    search_data = search_resp.json()
+                    files = search_data.get("query", {}).get("search", [])
+                    if files:
+                        # Get the first file's info
+                        file_title = files[0]["title"]
+                        info_resp = await client.get(
+                            "https://commons.wikimedia.org/w/api.php",
+                            params={
+                                "action": "query",
+                                "titles": file_title,
+                                "prop": "imageinfo",
+                                "iiprop": "url|extmetadata",
+                                "iiurlwidth": 1024,
+                                "format": "json",
+                            },
+                            timeout=15,
+                        )
+                        if info_resp.status_code == 200:
+                            info_data = info_resp.json()
+                            pages = info_data.get("query", {}).get("pages", {})
+                            for page in pages.values():
+                                if "imageinfo" in page:
+                                    img_info = page["imageinfo"][0]
+                                    ext_meta = img_info.get("extmetadata", {})
+                                    artist = ext_meta.get("Artist", {}).get("value", "Unknown")
+                                    # Strip HTML tags from artist
+                                    import re
+                                    artist = re.sub(r'<[^>]+>', '', artist)
+                                    return {
+                                        "image_url": img_info["thumburl"],
+                                        "page_url": img_info["descriptionurl"],
+                                        "photographer": artist,
+                                        "source": "Wikimedia Commons",
+                                        "query": query,
+                                    }
+        except Exception as e:
+            logger.warning(f"Wikimedia Commons fallback failed: {e}")
+        
+        return {"error": f"Could not find image for '{query}'"}
 
     async def _read_file(self, path: str) -> Dict:
         from app.core.config import settings
