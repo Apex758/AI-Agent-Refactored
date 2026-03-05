@@ -319,7 +319,9 @@ class Gateway:
             use_deep=use_deep,
         )
 
-        if media["images"] or media["videos"]:
+        if phase == "teaching" and media["images"]:
+            yield {"type": "teaching_media", "images": media["images"]}
+        elif media["images"] or media["videos"]:
             yield {"type": "media", "images": media["images"], "videos": media["videos"]}
 
         words = full_response.split(" ")
@@ -486,6 +488,11 @@ class Gateway:
                             for vid in tool_result.get("videos", []):
                                 if vid not in media["videos"]:
                                     media["videos"].append(vid)
+
+                        if tc["name"] == "get_image" and isinstance(tool_result, dict):
+                            img_url = tool_result.get("image_url")
+                            if img_url and img_url not in media["images"]:
+                                media["images"].append(img_url)
 
                         result_str = json.dumps(tool_result) if isinstance(tool_result, dict) else str(tool_result)
                     except Exception as e:

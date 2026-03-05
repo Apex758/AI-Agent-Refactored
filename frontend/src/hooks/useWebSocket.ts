@@ -79,6 +79,16 @@ export function useWebSocket(clientId: string) {
             addScrapedMedia(msg.images ?? [], msg.videos ?? [])
             break
 
+          case 'teaching_media': {
+            const wb = useWhiteboardStore.getState()
+            useUIStore.getState().setMode('whiteboard')
+            wb.switchToPage(PAGES.TEACHING)
+            wb.placeTeachingImage(msg.images ?? [])
+            // Also surface the image in the chat message
+            addScrapedMedia(msg.images ?? [], [])
+            break
+          }
+
           case 'visual_plan': {
             if (msg.plan && msg.plan.visuals?.length) {
               console.log(`[ws] Visual plan received`)

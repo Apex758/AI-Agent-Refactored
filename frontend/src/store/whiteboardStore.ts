@@ -209,6 +209,7 @@ interface WhiteboardStore {
   playScene: (scene: WhiteboardScene, speakFn: (text: string) => Promise<void>) => void
   placeYouTubeVideos: (ids: string[]) => void
   placeScrapedMedia: (images: string[], videos: string[]) => void
+  placeTeachingImage: (images: string[]) => void
   focusOrPlaceMedia: (key: string) => void
   exportAsImage: () => Promise<Blob | null>
 }
@@ -615,6 +616,51 @@ export const useWhiteboardStore = create<WhiteboardStore>((set, get) => ({
         placedMedia: { ...s.placedMedia, ...updates },
         mediaCount: count,
       }))
+    }
+  },
+
+  placeTeachingImage: (images) => {
+    const { editor, placedMedia, currentChatId } = get()
+    if (!editor || images.length === 0) return
+
+    const teachingPage = findPage(editor, PAGES.TEACHING)
+    if (teachingPage) editor.setCurrentPage(teachingPage.id)
+
+    let count = get().mediaCount
+    const updates: Record<string, boolean> = {}
+    let lastShapeId: TLShapeId | null = null
+
+    for (const url of images) {
+      const key = `teaching-img-${url}`
+      if (placedMedia[key]) continue
+
+      // Place to the right of the teaching frames
+      const x = MEDIA_AREA.X
+      const y = MEDIA_AREA.Y + count * MEDIA_AREA.STEP
+
+      const shapeId = placeImageOnBoard(editor, url, x, y, 400, 300)
+      lastShapeId = shapeId
+
+      updates[key] = true
+      count++
+    }
+
+    if (Object.keys(updates).length > 0) {
+      set((s) => ({
+        placedMedia: { ...s.placedMedia, ...updates },
+        mediaCount: count,
+      }))
+      get().saveSnapshot(currentChatId)
+
+      if (lastShapeId) {
+        const sid = lastShapeId
+        setTimeout(() => {
+          try {
+            editor.select(sid)
+            editor.zoomToSelection()
+          } catch {}
+        }, 150)
+      }
     }
   },
 
