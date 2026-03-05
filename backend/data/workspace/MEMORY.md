@@ -6,6 +6,36 @@
 
 ## Important Facts
 
+- User wants a picture of a car
+
+
+- User wants a video of a car
+
+
+- User likes cars
+
+
+- User is repeatedly asking for visual content despite being told it's not possible
+
+
+- User wants videos about cars
+
+
+- User wants pictures of cars
+
+
+- Assistant cannot provide images or videos
+
+
+- User wants a picture of a car
+
+
+- User wants a video about cars
+
+
+- User wants a picture of a car
+
+
 - User understands that solid particles vibrate in place
 
 

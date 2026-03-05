@@ -21,7 +21,7 @@ interface CenterStageProps {
   onAfterSnapshot?: () => void  // FIX 1: passed down to WhiteboardLayer
 }
 
-function ModeToggle({ mode, setMode }: { mode: UIMode; setMode: (m: UIMode) => void }) {
+function ModeToggle({ mode, setMode, locked }: { mode: UIMode; setMode: (m: UIMode) => void; locked: boolean }) {
   return (
     <div
       className="flex rounded-lg overflow-hidden"
@@ -32,13 +32,16 @@ function ModeToggle({ mode, setMode }: { mode: UIMode; setMode: (m: UIMode) => v
           key={m}
           onClick={(e) => {
             e.stopPropagation()
-            setMode(m)
+            if (!locked) setMode(m)
           }}
           className="px-3 py-1.5 text-xs font-medium transition-all capitalize"
           style={{
             background: mode === m ? 'var(--seal-brown)' : 'transparent',
-            color: mode === m ? 'var(--text-inverse)' : 'var(--text-secondary)',
+            color: mode === m ? 'var(--text-inverse)' : locked ? 'var(--text-disabled, #666)' : 'var(--text-secondary)',
+            cursor: locked ? 'not-allowed' : 'pointer',
+            opacity: locked ? 0.6 : 1,
           }}
+          disabled={locked}
         >
           {m === 'chat' ? <><Icon name="chat" size={14} /> Chat</> : <><Icon name="palette" size={14} /> Board</>}
         </button>
@@ -57,10 +60,11 @@ export default function CenterStage({
   onMicClick,
   onAfterSnapshot,
 }: CenterStageProps) {
-  const { mode, setMode } = useUIStore()
+  const { mode, setMode, locked, toggleLock } = useUIStore()
   const { saveSnapshot, currentSubtitle, playbackState } = useWhiteboardStore()
 
   const handleSetMode = (newMode: UIMode) => {
+    if (locked) return
     if (mode === 'whiteboard' && newMode === 'chat' && chatId) {
       saveSnapshot(chatId)
     }
@@ -75,7 +79,26 @@ export default function CenterStage({
           {headerLeft}
         </div>
 
-        {chatId && <ModeToggle mode={mode} setMode={handleSetMode} />}
+        {chatId && (
+          <div className="flex items-center gap-2">
+            <ModeToggle mode={mode} setMode={handleSetMode} locked={locked} />
+            <button
+              onClick={(e) => {
+                e.stopPropagation()
+                toggleLock()
+              }}
+              className="p-1.5 rounded-lg transition-all"
+              style={{
+                background: locked ? 'var(--seal-brown)' : 'transparent',
+                color: locked ? 'var(--text-inverse)' : 'var(--text-secondary)',
+                border: '1.5px solid var(--border-strong)',
+              }}
+              title={locked ? 'Unlock tab' : 'Lock tab'}
+            >
+              <Icon name={locked ? 'lock' : 'unlock'} size={14} />
+            </button>
+          </div>
+        )}
 
         <div className="flex gap-2 items-center">
           {headerRight}

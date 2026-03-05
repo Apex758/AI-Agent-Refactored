@@ -21,6 +21,7 @@ import {
   Edit01Icon,
   Menu01Icon,
   PinIcon,
+  LockIcon,
 } from '@hugeicons/core-free-icons'
 
 export type IconName =
@@ -43,6 +44,8 @@ export type IconName =
   | 'edit'
   | 'menu'
   | 'pin'
+  | 'lock'
+  | 'unlock'
 
 const iconMap: Record<IconName, typeof File02Icon> = {
   'file-text': File02Icon,
@@ -64,6 +67,8 @@ const iconMap: Record<IconName, typeof File02Icon> = {
   'edit': Edit01Icon,
   'menu': Menu01Icon,
   'pin': PinIcon,
+  'lock': LockIcon,
+  'unlock': LockIcon, // Use same icon, style differently
 }
 
 interface IconProps {
