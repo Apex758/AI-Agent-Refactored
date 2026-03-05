@@ -2,13 +2,15 @@
 
 import { useEffect, useState, useRef } from 'react'
 import type { PlaybackState } from '@/types/whiteboard-sync'
+import type { UIMode } from './types'
 
 interface SubtitleOverlayProps {
   text: string            // current subtitle text (one full line)
   playback: PlaybackState
+  mode: UIMode            // current UI mode to control visibility
 }
 
-export default function SubtitleOverlay({ text, playback }: SubtitleOverlayProps) {
+export default function SubtitleOverlay({ text, playback, mode }: SubtitleOverlayProps) {
   const [visible, setVisible] = useState(false)
   const [displayText, setDisplayText] = useState('')
   const [opacity, setOpacity] = useState(0)
@@ -46,6 +48,9 @@ export default function SubtitleOverlay({ text, playback }: SubtitleOverlayProps
       return () => clearTimeout(hideTimer)
     }
   }, [text, playback.isPlaying, playback.currentIndex, playback.isFading])
+
+  // Hide subtitles when in chat mode (TTS still runs, just no visual)
+  if (mode === 'chat') return null
 
   if (!visible && !displayText) return null
 

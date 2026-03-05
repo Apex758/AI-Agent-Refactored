@@ -119,8 +119,8 @@ export default function CenterStage({
           </div>
         )}
 
-        {/* Subtitle overlay — visible over BOTH chat and whiteboard during TTS playback */}
-        <SubtitleOverlay text={currentSubtitle} playback={playbackState} />
+        {/* Subtitle overlay — visible only in whiteboard mode during TTS playback */}
+        <SubtitleOverlay text={currentSubtitle} playback={playbackState} mode={mode} />
       </div>
     </div>
   )
