@@ -19,7 +19,11 @@ function getYouTubeId(url: string): string | null {
 
 // ── Inline image URL helper ───────────────────────────────────────
 function isImageUrl(url: string): boolean {
-  return /\.(png|jpg|jpeg|gif|webp|svg)(\?.*)?$/i.test(url)
+  if (/\.(png|jpg|jpeg|gif|webp|svg)(\?.*)?$/i.test(url)) return true
+  try {
+    const { hostname } = new URL(url)
+    return hostname === 'images.unsplash.com' || hostname === 'source.unsplash.com'
+  } catch { return false }
 }
 
 // ── URL → clickable links + YouTube embeds + image previews ──────
@@ -54,6 +58,15 @@ function MessageContent({ content }: { content: string }) {
                   className="rounded-xl max-h-52 object-contain"
                   style={{ border: '1px solid var(--border)' }}
                 />
+                <a
+                  href={p.value}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="block text-xs mt-1 underline underline-offset-2 opacity-60 hover:opacity-100 transition-opacity truncate"
+                  style={{ color: 'var(--vegas-gold)' }}
+                >
+                  {p.value.length > 55 ? p.value.slice(0, 53) + '…' : p.value}
+                </a>
               </span>
             )
           }

@@ -6,6 +6,30 @@
 
 ## Important Facts
 
+- User wants videos of trees
+
+
+- User wants pictures of trees
+
+
+- User likes trees
+
+
+- User wants a picture of a tree
+
+
+- User wants videos
+
+
+- User wants pictures
+
+
+- User likes ducks
+
+
+- User likes cars
+
+
 - User wants videos of cars
 
 
