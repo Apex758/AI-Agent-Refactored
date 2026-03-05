@@ -14,7 +14,7 @@ export const PAGES = {
   TEACHING:    'Teaching',
   PRACTICE:    'Practice',
   NOTE_TAKING: 'Note Taking',
-  SCRATCH:     'Scratch',
+  SKETCH:      'Sketch',
 } as const
 
 export type PageName = (typeof PAGES)[keyof typeof PAGES]
@@ -23,7 +23,7 @@ const PAGE_ORDER: PageName[] = [
   PAGES.TEACHING,
   PAGES.PRACTICE,
   PAGES.NOTE_TAKING,
-  PAGES.SCRATCH,
+  PAGES.SKETCH,
 ]
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -546,6 +546,10 @@ export const useWhiteboardStore = create<WhiteboardStore>((set, get) => ({
   placeYouTubeVideos: (ids) => {
     const { editor, placedMedia } = get()
     if (!editor) return
+
+    const noteTakingPage = findPage(editor, PAGES.NOTE_TAKING)
+    if (noteTakingPage) editor.setCurrentPage(noteTakingPage.id)
+
     let count = get().mediaCount
     const updates: Record<string, boolean> = {}
 
@@ -586,6 +590,10 @@ export const useWhiteboardStore = create<WhiteboardStore>((set, get) => ({
   placeScrapedMedia: (images, _videos) => {
     const { editor, placedMedia } = get()
     if (!editor) return
+
+    const noteTakingPage = findPage(editor, PAGES.NOTE_TAKING)
+    if (noteTakingPage) editor.setCurrentPage(noteTakingPage.id)
+
     let count = get().mediaCount
     const updates: Record<string, boolean> = {}
 
