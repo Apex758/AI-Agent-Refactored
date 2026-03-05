@@ -6,6 +6,15 @@
 
 ## Important Facts
 
+- User understands precipitation (rain)
+
+
+- User understands condensation
+
+
+- User understands evaporation
+
+
 - User understands rain as a form of precipitation
 
 

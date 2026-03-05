@@ -620,46 +620,97 @@ export const useWhiteboardStore = create<WhiteboardStore>((set, get) => ({
   },
 
   placeTeachingImage: (images) => {
-    const { editor, placedMedia, currentChatId } = get()
+    const { editor, placedMedia, currentChatId, slotCounts } = get()
     if (!editor || images.length === 0) return
 
     const teachingPage = findPage(editor, PAGES.TEACHING)
     if (teachingPage) editor.setCurrentPage(teachingPage.id)
 
+    const sk = slotKey(currentChatId, PAGES.TEACHING)
+    let slot = slotCounts[sk] || 0
     let count = get().mediaCount
     const updates: Record<string, boolean> = {}
-    let lastShapeId: TLShapeId | null = null
+    let lastFrameId: TLShapeId | null = null
 
     for (const url of images) {
       const key = `teaching-img-${url}`
       if (placedMedia[key]) continue
 
-      // Place to the right of the teaching frames
-      const x = MEDIA_AREA.X
-      const y = MEDIA_AREA.Y + count * MEDIA_AREA.STEP
+      const pos = slotToXY(slot)
+      const frameId = createShapeId()
+      const figureNum = slot + 1
 
-      const shapeId = placeImageOnBoard(editor, url, x, y, 400, 300)
-      lastShapeId = shapeId
+      // Create a named Figure frame at the next slot in the teaching grid
+      editor.createShape({
+        id: frameId,
+        type: 'frame',
+        x: pos.x,
+        y: pos.y,
+        props: {
+          w: A4.WIDTH,
+          h: A4.HEIGHT,
+          name: `Figure ${figureNum}`,
+        },
+      })
 
-      updates[key] = true
+      // Place the image inside the frame as a child shape
+      const imgId = createShapeId()
+      const assetId = `asset:img-${Math.random().toString(36).slice(2, 10)}` as any
+      const imgW = A4.WIDTH - 80
+      const imgH = A4.HEIGHT - 160
+
+      try {
+        editor.createAssets([{
+          id: assetId,
+          type: 'image',
+          typeName: 'asset',
+          props: {
+            name: url.split('/').pop()?.slice(0, 30) || 'image',
+            src: url,
+            w: imgW,
+            h: imgH,
+            mimeType: 'image/jpeg',
+            isAnimated: false,
+          },
+          meta: {},
+        } as any])
+
+        editor.createShape({
+          id: imgId,
+          type: 'image',
+          parentId: frameId,
+          x: 40,
+          y: 80,
+          props: { assetId, w: imgW, h: imgH },
+        } as any)
+      } catch (e) {
+        console.warn('[whiteboard] Teaching image asset failed:', e)
+        editor.createShape({
+          id: imgId,
+          type: 'text',
+          parentId: frameId,
+          x: 40,
+          y: 80,
+          props: { text: `🖼 ${url.length > 50 ? url.slice(0, 50) + '…' : url}`, size: 'm', autoSize: true },
+        } as any)
+      }
+
+      slot++
       count++
+      updates[key] = true
+      lastFrameId = frameId
     }
 
     if (Object.keys(updates).length > 0) {
       set((s) => ({
+        slotCounts: { ...s.slotCounts, [sk]: slot },
         placedMedia: { ...s.placedMedia, ...updates },
         mediaCount: count,
       }))
       get().saveSnapshot(currentChatId)
 
-      if (lastShapeId) {
-        const sid = lastShapeId
-        setTimeout(() => {
-          try {
-            editor.select(sid)
-            editor.zoomToSelection()
-          } catch {}
-        }, 150)
+      if (lastFrameId) {
+        centerOnFrame(editor, lastFrameId)
       }
     }
   },
