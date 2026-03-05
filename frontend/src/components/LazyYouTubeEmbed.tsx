@@ -1,5 +1,6 @@
 'use client'
 import { useEffect, useRef, useState } from 'react'
+import Icon from '@/components/Icon'
 
 interface LazyYouTubeEmbedProps {
   ytId: string
@@ -14,8 +15,8 @@ interface LazyYouTubeEmbedProps {
 export default function LazyYouTubeEmbed({ ytId }: LazyYouTubeEmbedProps) {
   const containerRef = useRef<HTMLSpanElement>(null)
   const [visible, setVisible] = useState(false)
-  const [activated, setActivated] = useState(false)   // true after first user click
-  const [thumbError, setThumbError] = useState(false) // true when thumbnail 404s
+  const [activated, setActivated] = useState(false)
+  const [thumbError, setThumbError] = useState(false)
 
   useEffect(() => {
     const el = containerRef.current
@@ -39,7 +40,6 @@ export default function LazyYouTubeEmbed({ ytId }: LazyYouTubeEmbedProps) {
       style={{ maxWidth: 360 }}
     >
       {visible && activated ? (
-        /* Real iframe — only rendered while in viewport AND user clicked play */
         <iframe
           width="100%"
           height="200"
@@ -50,7 +50,6 @@ export default function LazyYouTubeEmbed({ ytId }: LazyYouTubeEmbedProps) {
           style={{ border: '1px solid var(--border)', display: 'block' }}
         />
       ) : (
-        /* Lightweight thumbnail placeholder — zero WebGL cost */
         <span
           onClick={() => setActivated(true)}
           className="relative block rounded-xl overflow-hidden cursor-pointer"
@@ -75,7 +74,6 @@ export default function LazyYouTubeEmbed({ ytId }: LazyYouTubeEmbedProps) {
               }}
             />
           ) : (
-            /* Fallback when thumbnail 404s (deleted/private video) */
             <span
               style={{
                 width: '100%',
@@ -93,7 +91,6 @@ export default function LazyYouTubeEmbed({ ytId }: LazyYouTubeEmbedProps) {
               YouTube video
             </span>
           )}
-          {/* Play button overlay */}
           <span
             style={{
               position: 'absolute',

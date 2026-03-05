@@ -141,17 +141,39 @@ class Gateway:
 
         return "none"
 
+    # ── Get current milestone topic for visual planning ─────
+
+    def _get_current_milestone_topic(self, chat_id: str) -> Optional[str]:
+        """Get the topic + current milestone description for visual planning."""
+        store = get_milestone_store()
+        plans = store.list_plans_for_chat(chat_id)
+        if not plans:
+            return None
+        plan = plans[0]
+        current = plan.current_milestone()
+        if not current:
+            return None
+        return f"{plan.topic}: {current.title} - {current.description}"
+
     # ── Visual planning ─────────────────────────────────────
 
-    async def _generate_visual_plan(self, message: str) -> Tuple[str, Optional[dict]]:
+    async def _generate_visual_plan(self, message: str, chat_id: str = "") -> Tuple[str, Optional[dict]]:
         """
         Visual-first pipeline: ask LLM what diagrams this lesson needs.
         Returns (visual_context_for_system_prompt, plan_dict_for_frontend).
+        
+        FIX: Now also considers the current milestone topic, not just user message.
         """
         planner = get_visual_planner()
 
+        # Build a richer context: user message + current milestone
+        plan_context = message
+        milestone_topic = self._get_current_milestone_topic(chat_id)
+        if milestone_topic:
+            plan_context = f"{message}\n\nCurrent milestone being taught: {milestone_topic}"
+
         try:
-            plan = await planner.plan(message)
+            plan = await planner.plan(plan_context)
             if not plan or not plan.visuals:
                 return "", None
 
@@ -217,7 +239,10 @@ class Gateway:
         """
         Stream response tokens with full tool-call support.
         Routes to DEEP model for breakdown, SMALL model for everything else.
-        Only generates visual plans during teaching phase (not breakdown).
+        
+        FIX: Generate visual plans during teaching phase ALWAYS (not just
+        when LEARN_RE matches user message). This ensures diagrams appear
+        when user says "yes" / "ready" / "go" to start a milestone.
         """
         self.memory.save_message(client_id, "user", message)
 
@@ -239,12 +264,16 @@ class Gateway:
         elif phase == "teaching":
             logger.info(f"[gateway] TEACHING phase → using SMALL model")
 
-        # ── Visual planning: ONLY during teaching, NOT breakdown ──
+        # ── Visual planning: during teaching phase ALWAYS ──
+        # FIX: removed the `and LEARN_RE.search(message)` condition
+        # so diagrams are generated even when user says "yes/ready/go"
         visual_context = ""
         visual_plan_dict = None
 
-        if phase == "teaching" and LEARN_RE.search(message):
-            visual_context, visual_plan_dict = await self._generate_visual_plan(message)
+        if phase == "teaching":
+            visual_context, visual_plan_dict = await self._generate_visual_plan(
+                message, chat_id=client_id
+            )
 
             if visual_plan_dict:
                 yield {
@@ -357,6 +386,12 @@ class Gateway:
 
                     for action in scene.get("whiteboard", {}).get("actions", []):
                         action["text"] = clean_for_whiteboard(action.get("text", ""))
+                        # FIX: ensure position always has x and y
+                        if "position" not in action or not isinstance(action.get("position"), dict):
+                            action["position"] = {"x": 0, "y": 0}
+                        else:
+                            action["position"].setdefault("x", 0)
+                            action["position"].setdefault("y", 0)
 
                     return scene
 
@@ -431,7 +466,6 @@ class Gateway:
 
                     # ── Early exit for create_learning_plan ─────────────────────
                     if tc["name"] == "create_learning_plan":
-                        # Append result, then immediately do one final text pass
                         if settings.llm_provider == "openai":
                             messages.append({
                                 "role": "assistant",
@@ -451,7 +485,6 @@ class Gateway:
                             messages.append({"role": "assistant", "content": f"[Using {tc['name']}]"})
                             messages.append({"role": "user", "content": f"Tool result for {tc['name']}: {result_str}"})
 
-                        # Force a plain text reply - no more tools allowed
                         final = await self.llm.generate(
                             messages=messages,
                             system_prompt=system_prompt,
@@ -533,9 +566,7 @@ class Gateway:
                     except Exception as e:
                         result_str = f"Error: {str(e)}"
 
-                    # ── Early exit for create_learning_plan ─────────────────────
                     if tc["name"] == "create_learning_plan":
-                        # Append result, then immediately do one final text pass
                         if settings.llm_provider == "openai":
                             messages.append({
                                 "role": "assistant",
@@ -555,7 +586,6 @@ class Gateway:
                             messages.append({"role": "assistant", "content": f"[Using {tc['name']}]"})
                             messages.append({"role": "user", "content": f"Tool result for {tc['name']}: {result_str}"})
 
-                        # Force a plain text reply - no more tools allowed
                         final = await self.llm.generate(
                             messages=messages,
                             system_prompt=system_prompt,
@@ -603,18 +633,15 @@ class Gateway:
     ) -> str:
         parts = [self.get_personality()]
 
-        # Inject chat_id for tool calls
         if chat_id:
             parts.append(
                 f"\nCurrent chat_id: {chat_id}\n"
                 "Always use this exact chat_id when calling create_learning_plan or milestone_check."
             )
 
-        # Inject visual context (only present during teaching phase)
         if visual_context:
             parts.append(visual_context)
 
-        # ── Phase-specific prompt injection ─────────────────
         if learning_phase == "breakdown":
             breakdown_prompt = self._get_breakdown_prompt()
             if breakdown_prompt:

@@ -13,18 +13,26 @@ export interface UseVoiceReturn {
   stopSpeaking: () => void
 }
 
-export function useVoice(onFinalTranscript: (text: string) => void): UseVoiceReturn {
-  const [isListening, setIsListening]   = useState(false)
-  const [isSpeaking, setIsSpeaking]     = useState(false)
-  const [supported, setSupported]       = useState(false)
-  const [interimText, setInterimText]   = useState('')
+/**
+ * Voice hook — browser-only TTS + STT.
+ *
+ * TTS uses the Web Speech API which has a built-in utterance queue.
+ * Multiple speak() calls play back-to-back without cancelling each other.
+ * Only stopSpeaking() cancels the queue.
+ */
+export function useVoice(
+  onFinalTranscript: (text: string) => void,
+): UseVoiceReturn {
+  const [isListening, setIsListening] = useState(false)
+  const [isSpeaking, setIsSpeaking]   = useState(false)
+  const [supported, setSupported]     = useState(false)
+  const [interimText, setInterimText] = useState('')
 
-  const recRef         = useRef<any>(null)
-  const callbackRef    = useRef(onFinalTranscript)
-  const wsRef          = useRef<WebSocket | null>(null)
-  const audioRef       = useRef<HTMLAudioElement | null>(null)
-  const audioQueueRef  = useRef<string[]>([])   // object URLs waiting to play
-  const isPlayingRef   = useRef(false)
+  const recRef             = useRef<any>(null)
+  const callbackRef        = useRef(onFinalTranscript)
+  const pendingCountRef    = useRef(0)
+  const stopFlagRef        = useRef(false)
+  const preferredVoiceRef  = useRef<SpeechSynthesisVoice | null>(null)
 
   useEffect(() => { callbackRef.current = onFinalTranscript }, [onFinalTranscript])
 
@@ -32,98 +40,61 @@ export function useVoice(onFinalTranscript: (text: string) => void): UseVoiceRet
     if (typeof window === 'undefined') return
     const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
     setSupported(!!SR)
+
+    // Pre-cache the best English voice
+    const pickVoice = () => {
+      const voices = window.speechSynthesis?.getVoices() || []
+      preferredVoiceRef.current =
+        voices.find(v => v.lang.startsWith('en') && v.name.includes('Google')) ||
+        voices.find(v => v.lang.startsWith('en') && !v.localService) ||
+        voices.find(v => v.lang.startsWith('en')) ||
+        null
+    }
+    pickVoice()
+    window.speechSynthesis?.addEventListener('voiceschanged', pickVoice)
+    return () => { window.speechSynthesis?.removeEventListener('voiceschanged', pickVoice) }
   }, [])
 
-  // Initialize WebSocket connection for server-side TTS
-  useEffect(() => {
-    if (typeof window === 'undefined') return
-    const wsUrl = process.env.NEXT_PUBLIC_WS_URL
-    if (!wsUrl) return
-
-    const ws = new WebSocket(`${wsUrl}/webrtc`)
-    
-    ws.onopen = () => {
-      console.log('TTS WebSocket connected')
-    }
-    
-    // Play the next URL in the queue (called recursively until empty)
-    const playNext = () => {
-      if (audioQueueRef.current.length === 0) {
-        isPlayingRef.current = false
-        setIsSpeaking(false)
-        audioRef.current = null
-        return
-      }
-      isPlayingRef.current = true
-      setIsSpeaking(true)
-      const url = audioQueueRef.current.shift()!
-      const audio = new Audio(url)
-      audioRef.current = audio
-      const onDone = () => { URL.revokeObjectURL(url); playNext() }
-      audio.onended = onDone
-      audio.onerror = onDone
-      audio.play().catch(onDone)
-    }
-
-    ws.onmessage = (event) => {
-      const message = JSON.parse(event.data)
-      if (message.type === 'tts_audio') {
-        const audioBytes = Uint8Array.from(atob(message.audio), c => c.charCodeAt(0))
-        const blob = new Blob([audioBytes], { type: 'audio/wav' })
-        const url = URL.createObjectURL(blob)
-        audioQueueRef.current.push(url)
-        if (!isPlayingRef.current) playNext()
-      } else if (message.type === 'tts_error') {
-        console.error('TTS error:', message.message)
-        setIsSpeaking(false)
-      }
-    }
-    
-    ws.onerror = (error) => {
-      console.error('TTS WebSocket error:', error)
-    }
-    
-    ws.onclose = () => {
-      console.log('TTS WebSocket closed')
-    }
-    
-    wsRef.current = ws
-    
-    return () => {
-      ws.close()
-    }
-  }, [])
-
-  // ── TTS ──────────────────────────────────────────────────────────
+  // ── TTS ──────────────────────────────────────────────────────
 
   const stopSpeaking = useCallback(() => {
-    // Clear the queue so no more sentences play
-    audioQueueRef.current = []
-    isPlayingRef.current = false
-    if (audioRef.current) {
-      audioRef.current.pause()
-      audioRef.current = null
+    stopFlagRef.current = true
+    if (typeof window !== 'undefined' && window.speechSynthesis) {
+      window.speechSynthesis.cancel()
     }
+    pendingCountRef.current = 0
     setIsSpeaking(false)
+    setTimeout(() => { stopFlagRef.current = false }, 50)
   }, [])
 
   const speak = useCallback((text: string) => {
-    // Use the proper text cleaner utility
     const clean = cleanForTTS(text)
-    if (!clean) return
+    if (!clean || stopFlagRef.current) return
+    if (typeof window === 'undefined' || !window.speechSynthesis) return
 
-    // Send to Piper TTS via the /webrtc WebSocket
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({
-        type: 'tts',
-        text: clean,
-        speed: 1.0
-      }))
+    const utterance = new SpeechSynthesisUtterance(clean)
+    utterance.rate  = 1.0
+    utterance.pitch = 1.0
+    utterance.lang  = 'en-US'
+    if (preferredVoiceRef.current) utterance.voice = preferredVoiceRef.current
+
+    pendingCountRef.current++
+    setIsSpeaking(true)
+
+    utterance.onend = () => {
+      pendingCountRef.current = Math.max(0, pendingCountRef.current - 1)
+      if (pendingCountRef.current === 0) setIsSpeaking(false)
     }
-    // No browser TTS fallback — Piper only
+    utterance.onerror = () => {
+      pendingCountRef.current = Math.max(0, pendingCountRef.current - 1)
+      if (pendingCountRef.current === 0) setIsSpeaking(false)
+    }
+
+    // Web Speech API queues utterances automatically — no cancel needed
+    window.speechSynthesis.speak(utterance)
   }, [])
 
-  // ── STT ──────────────────────────────────────────────────────────
+  // ── STT ──────────────────────────────────────────────────────
 
   const stopListening = useCallback(() => {
     recRef.current?.stop()
@@ -145,7 +116,6 @@ export function useVoice(onFinalTranscript: (text: string) => void): UseVoiceRet
     rec.onresult = (e: any) => {
       const result     = e.results[e.results.length - 1]
       const transcript = result[0].transcript as string
-
       if (result.isFinal) {
         setInterimText('')
         setIsListening(false)

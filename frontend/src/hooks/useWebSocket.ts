@@ -21,27 +21,64 @@ function extractSentences(buf: string): { sentences: string[]; remainder: string
   return { sentences, remainder: buf.slice(lastEnd) }
 }
 
-/** Generate a short unique ID for TTS request correlation */
-function genRequestId(): string {
-  return Math.random().toString(36).slice(2, 10) + '-' + Date.now().toString(36)
+/**
+ * Browser TTS speak-and-wait: returns a Promise that resolves when the
+ * utterance finishes. Uses the same voice as useVoice (first English voice).
+ */
+function browserSpeakAndWait(text: string): Promise<void> {
+  return new Promise((resolve) => {
+    if (typeof window === 'undefined' || !window.speechSynthesis) {
+      resolve()
+      return
+    }
+    const clean = cleanForTTS(text)
+    if (!clean) { resolve(); return }
+
+    const utterance = new SpeechSynthesisUtterance(clean)
+    utterance.rate  = 1.0
+    utterance.pitch = 1.0
+    utterance.lang  = 'en-US'
+
+    // Pick the same voice as useVoice
+    const voices = window.speechSynthesis.getVoices()
+    const preferred =
+      voices.find(v => v.lang.startsWith('en') && v.name.includes('Google')) ||
+      voices.find(v => v.lang.startsWith('en') && !v.localService) ||
+      voices.find(v => v.lang.startsWith('en'))
+    if (preferred) utterance.voice = preferred
+
+    utterance.onend   = () => resolve()
+    utterance.onerror = () => resolve()
+
+    window.speechSynthesis.speak(utterance)
+  })
 }
 
 export function useWebSocket(clientId: string, onSentence?: (text: string) => void) {
   const wsRef = useRef<WebSocket | null>(null)
   const clientIdRef = useRef(clientId)
-  const sendRef = useRef<((msg: string) => void) | null>(null)
   const messageQueueRef = useRef<string[]>([])
   const { appendStreaming, finalizeStreaming, setError, setCitations, addScrapedMedia } = useChatStore()
 
-  const onSentenceRef   = useRef(onSentence)
-  const streamBufferRef = useRef('')
-  const streamSpokenRef = useRef(false)
+  const onSentenceRef      = useRef(onSentence)
+  const streamBufferRef    = useRef('')
+  const streamSpokenRef    = useRef(false)
+
+  /**
+   * When a visual_plan arrives (before tokens), we know a whiteboard scene
+   * will follow. Suppress streaming sentence TTS so only the scene's
+   * subtitles speak — prevents hearing the same content twice.
+   */
+  const sceneExpectedRef   = useRef(false)
 
   useEffect(() => { onSentenceRef.current = onSentence }, [onSentence])
   useEffect(() => { clientIdRef.current = clientId }, [clientId])
 
   const flushSentences = (isFinal: boolean) => {
     if (!onSentenceRef.current) return
+    // If a scene is expected, skip streaming TTS — scene subtitles will handle it
+    if (sceneExpectedRef.current) return
+
     const { sentences, remainder } = extractSentences(streamBufferRef.current)
     sentences.forEach(s => {
       onSentenceRef.current!(s)
@@ -77,22 +114,26 @@ export function useWebSocket(clientId: string, onSentence?: (text: string) => vo
           case 'complete':
             flushSentences(true)
             finalizeStreaming()
+            // Reset scene flag after response completes
+            sceneExpectedRef.current = false
             break
           case 'citations':
             setCitations(msg.citations || [])
             break
           case 'error':
             setError(msg.content)
+            sceneExpectedRef.current = false
             break
           case 'media':
-            console.log('[DEBUG WS] Received media event:', { images: msg.images, videos: msg.videos })
             addScrapedMedia(msg.images ?? [], msg.videos ?? [])
             break
 
           case 'visual_plan': {
-            // Backend sent a structured diagram plan → build on Teaching page
             if (msg.plan && msg.plan.visuals?.length) {
-              console.log(`[ws] Visual plan received: ${msg.plan.topic} (${msg.plan.visuals.length} diagrams)`)
+              console.log(`[ws] Visual plan received — suppressing streaming TTS`)
+              // Signal: a scene will follow, suppress streaming sentence TTS
+              sceneExpectedRef.current = true
+
               const wb = useWhiteboardStore.getState()
               wb.switchToPage(PAGES.TEACHING)
               wb.buildVisualPlan(msg.plan)
@@ -112,6 +153,7 @@ export function useWebSocket(clientId: string, onSentence?: (text: string) => vo
     ws.onopen = () => {
       streamBufferRef.current = ''
       streamSpokenRef.current = false
+      sceneExpectedRef.current = false
       setError(null)
       while (messageQueueRef.current.length > 0) {
         const queued = messageQueueRef.current.shift()!
@@ -138,68 +180,23 @@ export function useWebSocket(clientId: string, onSentence?: (text: string) => vo
     }
   }, [clientId])
 
-  // TTS request + wait for playback
-  const speakAndWait = useCallback((text: string): Promise<void> => {
-    return new Promise((resolve) => {
-      const ws = wsRef.current
-      const clean = cleanForTTS(text)
-      if (!clean) { resolve(); return }
-
-      if (!ws || ws.readyState !== WebSocket.OPEN) {
-        resolve()
-        return
-      }
-
-      const requestId = genRequestId()
-      let resolved = false
-      const done = () => {
-        if (resolved) return
-        resolved = true
-        clearTimeout(timer)
-        ws.removeEventListener('message', onMessage)
-        resolve()
-      }
-
-      const timer = setTimeout(() => done(), 15000)
-
-      const onMessage = (event: MessageEvent) => {
-        try {
-          const msg = JSON.parse(event.data)
-          if (msg.type === 'tts_audio' && msg.request_id === requestId) {
-            clearTimeout(timer)
-            ws.removeEventListener('message', onMessage)
-            resolved = true
-            const binary = atob(msg.audio)
-            const bytes = new Uint8Array(binary.length)
-            for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
-            const blob = new Blob([bytes], { type: 'audio/wav' })
-            const url = URL.createObjectURL(blob)
-            const audio = new Audio(url)
-            const onDone = () => { URL.revokeObjectURL(url); resolve() }
-            audio.onended = onDone
-            audio.onerror = onDone
-            audio.play().catch(() => onDone())
-          } else if (msg.type === 'tts_error' && msg.request_id === requestId) {
-            done()
-          }
-        } catch (e) { /* not our message */ }
-      }
-
-      ws.addEventListener('message', onMessage)
-      ws.send(JSON.stringify({ type: 'tts', text: clean, request_id: requestId }))
-    })
-  }, [])
-
-  // Whiteboard scene → switch to Teaching page + whiteboard mode, then play
+  // Whiteboard scene → kill any leftover streaming speech, switch to board, play scene
   const handleWhiteboardScene = useCallback((scene: any) => {
     if (!scene) return
+
+    // Cancel any in-progress browser TTS (leftover streaming sentences)
+    if (typeof window !== 'undefined' && window.speechSynthesis) {
+      window.speechSynthesis.cancel()
+    }
+
     useUIStore.getState().setMode('whiteboard')
     setTimeout(() => {
       const wb = useWhiteboardStore.getState()
       wb.switchToPage(PAGES.TEACHING)
-      wb.playScene(scene, speakAndWait)
+      // Scene subtitles will speak via browserSpeakAndWait (same male voice)
+      wb.playScene(scene, browserSpeakAndWait)
     }, 500)
-  }, [speakAndWait])
+  }, [])
   
   const send = useCallback((message: string) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
