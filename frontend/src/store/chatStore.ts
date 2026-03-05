@@ -10,6 +10,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   messagesByChatId: {},
   documentsByChatId: {},
   pendingCitations: [],
+  pendingMedia: null,
   isProcessing: false,
   streamingContent: '',
   error: null,
@@ -188,24 +189,8 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   },
 
   addScrapedMedia: (images: string[], videos: string[]) => {
-    console.log('[DEBUG addScrapedMedia] Called with:', { images, videos })
-    const { currentChatId, messagesByChatId } = get()
-    if (!currentChatId) return
     if (images.length === 0 && videos.length === 0) return
-    const msg: Message = {
-      id: genId(),
-      role: 'system',
-      content: 'Scraped media from page',
-      timestamp: Date.now(),
-      citations: [],
-      media: { images, videos },
-    }
-    set(s => ({
-      messagesByChatId: {
-        ...s.messagesByChatId,
-        [currentChatId]: [...(messagesByChatId[currentChatId] || []), msg],
-      },
-    }))
+    set({ pendingMedia: { images, videos } })
   },
 
   setCitations: (citations) => set({ pendingCitations: citations }),
@@ -213,7 +198,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   appendStreaming: (token: string) => set(s => ({ streamingContent: s.streamingContent + token })),
 
   finalizeStreaming: () => {
-    const { streamingContent, currentChatId, messagesByChatId, pendingCitations } = get()
+    const { streamingContent, currentChatId, messagesByChatId, pendingCitations, pendingMedia } = get()
     if (streamingContent && currentChatId) {
       const msg: Message = {
         id: genId(),
@@ -221,6 +206,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         content: streamingContent,
         timestamp: Date.now(),
         citations: pendingCitations,
+        ...(pendingMedia ? { media: pendingMedia } : {}),
       }
       const existing = messagesByChatId[currentChatId] || []
       set(s => ({
@@ -228,10 +214,11 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         streamingContent: '',
         isProcessing: false,
         pendingCitations: [],
+        pendingMedia: null,
       }))
       setTimeout(() => get().loadChats(), 1500)
     } else {
-      set({ isProcessing: false, streamingContent: '' })
+      set({ isProcessing: false, streamingContent: '', pendingMedia: null })
     }
   },
 

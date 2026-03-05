@@ -86,6 +86,7 @@ export interface ChatStore {
   messagesByChatId: Record<string, Message[]>
   documentsByChatId: Record<string, Document[]>
   pendingCitations: Citation[]
+  pendingMedia: ScrapedMedia | null
   isProcessing: boolean
   streamingContent: string
   error: string | null

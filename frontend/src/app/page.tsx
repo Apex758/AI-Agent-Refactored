@@ -380,8 +380,9 @@ function BoardLinkChips({
   media?: { images: string[]; videos: string[] }
   onOpen: (key: string) => void
 }) {
-  const YT_RE = /(?:youtube\.com\/watch\?v=|youtu\.be\/)([a-zA-Z0-9_-]{11})/g
-  const IMG_RE = /!\[.*?\]\((https?:\/\/[^\s)]+)\)/g
+  const YT_RE    = /(?:youtube\.com\/watch\?v=|youtu\.be\/)([a-zA-Z0-9_-]{11})/g
+  const IMG_MD_RE = /!\[.*?\]\((https?:\/\/[^\s)]+)\)/g
+  const URL_RE    = /https?:\/\/[^\s)>\]"']+/g
 
   const chips: Array<{ label: string; key: string }> = []
   const seen = new Set<string>()
@@ -397,11 +398,22 @@ function BoardLinkChips({
     if (!seen.has(key)) { seen.add(key); chips.push({ label: 'View Video on Board', key }) }
   })
 
-  IMG_RE.lastIndex = 0
-  while ((m = IMG_RE.exec(content)) !== null) {
+  // Markdown-style images
+  IMG_MD_RE.lastIndex = 0
+  while ((m = IMG_MD_RE.exec(content)) !== null) {
     const key = `img-${m[1]}`
     if (!seen.has(key)) { seen.add(key); chips.push({ label: 'View Image on Board', key }) }
   }
+
+  // Plain image URLs (e.g. Unsplash CDN links)
+  URL_RE.lastIndex = 0
+  while ((m = URL_RE.exec(content)) !== null) {
+    if (isImageUrl(m[0])) {
+      const key = `img-${m[0]}`
+      if (!seen.has(key)) { seen.add(key); chips.push({ label: 'View Image on Board', key }) }
+    }
+  }
+
   media?.images?.forEach(url => {
     const key = `img-${url}`
     if (!seen.has(key)) { seen.add(key); chips.push({ label: 'View Image on Board', key }) }
@@ -409,7 +421,7 @@ function BoardLinkChips({
 
   if (chips.length === 0) return null
   return (
-    <div className="flex flex-wrap gap-1.5 mt-1 max-w-[78%]">
+    <>
       {chips.map((chip, i) => (
         <button
           key={i}
@@ -425,7 +437,7 @@ function BoardLinkChips({
           <Icon name="pin" size={14} /> {chip.label}
         </button>
       ))}
-    </div>
+    </>
   )
 }
 
@@ -853,25 +865,22 @@ export default function Home() {
                       </div>
                       {msg.media && <MediaCard media={msg.media} />}
 
-                      {/* Speaker button — only on assistant messages */}
+                      {/* Speaker + board chips — same row */}
                       {msg.role === 'assistant' && (
-                        <div className="flex flex-wrap gap-1.5 mt-1 max-w-[78%]">
+                        <div className="flex flex-wrap items-center gap-1.5 mt-1 max-w-[78%]">
                           <SpeakButton text={msg.content} voice={voice} />
+                          <BoardLinkChips
+                            content={msg.content}
+                            media={msg.media}
+                            onOpen={(key) => {
+                              setMode('whiteboard')
+                              if (key.startsWith('yt-')) {
+                                switchToPage(PAGES.NOTE_TAKING)
+                              }
+                              setTimeout(() => focusOrPlaceMedia(key), 250)
+                            }}
+                          />
                         </div>
-                      )}
-
-                      {msg.role === 'assistant' && (
-                        <BoardLinkChips
-                          content={msg.content}
-                          media={msg.media}
-                          onOpen={(key) => {
-                            setMode('whiteboard')
-                            if (key.startsWith('yt-')) {
-                              switchToPage(PAGES.NOTE_TAKING)
-                            }
-                            setTimeout(() => focusOrPlaceMedia(key), 250)
-                          }}
-                        />
                       )}
                       {msg.role === 'assistant' && msg.citations && msg.citations.length > 0 && (
                         <div className="flex flex-wrap gap-1 mt-1.5 max-w-[78%]">
