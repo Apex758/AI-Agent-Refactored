@@ -57,7 +57,12 @@ class ToolRegistry:
     def _register_builtins(self):
         self.register(Tool(
             name="web_search",
-            description="Search the web for current information",
+            description=(
+                "Search the web for current information, images, videos, and more. "
+                "Use this when the user asks for pictures, photos, videos, or any current information. "
+                "For images, search on sites like unsplash.com, pexels.com, or pixabay.com. "
+                "For videos, search YouTube. Then use web_fetch on the results to get actual media URLs."
+            ),
             parameters={"type": "object", "properties": {
                 "query": {"type": "string", "description": "Search query"},
             }, "required": ["query"]},
@@ -66,7 +71,13 @@ class ToolRegistry:
 
         self.register(Tool(
             name="web_fetch",
-            description="Fetch and extract text content from a URL",
+            description=(
+                "Fetch and extract content from a URL. Returns page text, image URLs, and YouTube video IDs. "
+                "Use this after web_search to get actual image URLs and video IDs from pages. "
+                "The extracted image URLs and video IDs will be automatically displayed in the chat. "
+                "For images: fetches all <img> tags and returns their URLs. "
+                "For videos: extracts YouTube video IDs from links and embeds."
+            ),
             parameters={"type": "object", "properties": {
                 "url": {"type": "string", "description": "URL to fetch"},
             }, "required": ["url"]},
@@ -210,10 +221,23 @@ class ToolRegistry:
                     soup = BeautifulSoup(resp.text, "html.parser")
                     results = []
                     for r in soup.select(".result")[:5]:
+                        title_el = r.select_one(".result__title")
+                        snippet_el = r.select_one(".result__snippet")
+                        url_el = r.select_one(".result__url")
+                        # Also try to get the actual href link
+                        link_el = r.select_one("a.result__a")
+                        href = ""
+                        if link_el and link_el.get("href"):
+                            href = link_el["href"]
+                            # DuckDuckGo wraps URLs — try to extract the real one
+                            if "uddg=" in href:
+                                import urllib.parse
+                                parsed = urllib.parse.parse_qs(urllib.parse.urlparse(href).query)
+                                href = parsed.get("uddg", [href])[0]
                         results.append({
-                            "title": (r.select_one(".result__title") or type('', (), {'get_text': lambda *a, **k: ''})()).get_text(strip=True),
-                            "snippet": (r.select_one(".result__snippet") or type('', (), {'get_text': lambda *a, **k: ''})()).get_text(strip=True),
-                            "url": (r.select_one(".result__url") or type('', (), {'get_text': lambda *a, **k: ''})()).get_text(strip=True),
+                            "title": title_el.get_text(strip=True) if title_el else "",
+                            "snippet": snippet_el.get_text(strip=True) if snippet_el else "",
+                            "url": href or (url_el.get_text(strip=True) if url_el else ""),
                         })
                     return {"results": results, "query": query}
                 return {"error": f"Search failed: {resp.status_code}"}
@@ -227,19 +251,35 @@ class ToolRegistry:
             r'(?:youtube\.com/watch\?v=|youtu\.be/|youtube\.com/embed/)([a-zA-Z0-9_-]{11})'
         )
         SKIP_PATTERNS = ('pixel', 'tracking', 'analytics', 'beacon', 'data:', 'base64',
-                         '.ico', 'favicon', 'logo', '1x1', 'blank')
+                         '.ico', 'favicon', 'logo', '1x1', 'blank', 'spacer', 'sprite')
 
         try:
             async with httpx.AsyncClient() as client:
                 resp = await client.get(url, timeout=15, follow_redirects=True,
-                    headers={"User-Agent": "Mozilla/5.0"})
+                    headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"})
                 if resp.status_code == 200:
                     from bs4 import BeautifulSoup
                     soup = BeautifulSoup(resp.text, "html.parser")
 
                     images: list = []
-                    for img in soup.find_all("img", src=True):
-                        src: str = img["src"].strip()
+                    # Check for high-quality image tags (srcset, data-src, etc.)
+                    for img in soup.find_all("img"):
+                        src = (
+                            img.get("data-src") or
+                            img.get("data-original") or
+                            img.get("src") or ""
+                        ).strip()
+
+                        # Also check srcset for higher-res versions
+                        srcset = img.get("srcset", "")
+                        if srcset and not src:
+                            # Take the first URL from srcset
+                            first = srcset.split(",")[0].strip().split(" ")[0]
+                            if first.startswith("http"):
+                                src = first
+
+                        if not src:
+                            continue
                         if src.startswith("//"):
                             src = "https:" + src
                         elif src.startswith("/"):
@@ -251,10 +291,51 @@ class ToolRegistry:
                         sl = src.lower()
                         if any(p in sl for p in SKIP_PATTERNS):
                             continue
+                        # Skip tiny images (likely icons)
+                        width = img.get("width", "")
+                        height = img.get("height", "")
+                        try:
+                            if width and int(width) < 50:
+                                continue
+                            if height and int(height) < 50:
+                                continue
+                        except (ValueError, TypeError):
+                            pass
                         if src not in images:
                             images.append(src)
-                        if len(images) >= 6:
+                        if len(images) >= 8:
                             break
+
+                    # Also look for background images in style attributes
+                    if len(images) < 4:
+                        import re
+                        for tag in soup.find_all(style=True):
+                            style = tag.get("style", "")
+                            bg_urls = re.findall(r'url\(["\']?(https?://[^"\')\s]+)["\']?\)', style)
+                            for bg_url in bg_urls:
+                                sl = bg_url.lower()
+                                if any(p in sl for p in SKIP_PATTERNS):
+                                    continue
+                                if bg_url not in images:
+                                    images.append(bg_url)
+                                if len(images) >= 8:
+                                    break
+
+                    # Also look for <a> tags linking directly to images
+                    if len(images) < 4:
+                        for a in soup.find_all("a", href=True):
+                            href = a["href"]
+                            if any(href.lower().endswith(ext) for ext in ('.jpg', '.jpeg', '.png', '.gif', '.webp')):
+                                if href.startswith("//"):
+                                    href = "https:" + href
+                                elif href.startswith("/"):
+                                    from urllib.parse import urlparse
+                                    parsed = urlparse(url)
+                                    href = f"{parsed.scheme}://{parsed.netloc}{href}"
+                                if href.startswith("http") and href not in images:
+                                    images.append(href)
+                                if len(images) >= 8:
+                                    break
 
                     videos: list = []
                     for tag in soup.find_all(["a", "iframe"], href=True if True else False):

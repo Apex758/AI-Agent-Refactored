@@ -173,8 +173,6 @@ class Gateway:
         """
         Visual-first pipeline: ask LLM what diagrams this lesson needs.
         Returns (visual_context_for_system_prompt, plan_dict_for_frontend).
-        
-        FIX: Now also considers the current milestone topic, not just user message.
         """
         planner = get_visual_planner()
 
@@ -251,10 +249,6 @@ class Gateway:
         """
         Stream response tokens with full tool-call support.
         Routes to DEEP model for breakdown, SMALL model for everything else.
-        
-        FIX: Generate visual plans during teaching phase ALWAYS (not just
-        when LEARN_RE matches user message). This ensures diagrams appear
-        when user says "yes" / "ready" / "go" to start a milestone.
         """
         self.memory.save_message(client_id, "user", message)
 
@@ -451,7 +445,8 @@ class Gateway:
         iteration = 0
         media: Dict = {"images": [], "videos": []}
         tool_call_counts: Dict[str, int] = {}
-        MAX_SAME_TOOL = 1
+        # Allow each tool to be called up to 3 times (needed for search → fetch → fetch flows)
+        MAX_SAME_TOOL = 3
 
         while iteration < max_iterations:
             result = await self.llm.generate(
@@ -471,7 +466,7 @@ class Gateway:
                 for tc in tool_calls:
                     tool_call_counts[tc['name']] = tool_call_counts.get(tc['name'], 0) + 1
                     if tool_call_counts[tc['name']] > MAX_SAME_TOOL:
-                        logger.warning(f"Skipping duplicate tool call: {tc['name']}")
+                        logger.warning(f"Skipping duplicate tool call: {tc['name']} (count={tool_call_counts[tc['name']]})")
                         continue
 
                     logger.info(f"Tool call: {tc['name']}({tc.get('arguments', '')})")
@@ -562,7 +557,7 @@ class Gateway:
         max_iterations = max_iterations or settings.max_tool_calls
         iteration = 0
         tool_call_counts: Dict[str, int] = {}
-        MAX_SAME_TOOL = 1
+        MAX_SAME_TOOL = 3
 
         while iteration < max_iterations:
             result = await self.llm.generate(
@@ -582,7 +577,7 @@ class Gateway:
                 for tc in tool_calls:
                     tool_call_counts[tc['name']] = tool_call_counts.get(tc['name'], 0) + 1
                     if tool_call_counts[tc['name']] > MAX_SAME_TOOL:
-                        logger.warning(f"Skipping duplicate tool call: {tc['name']}")
+                        logger.warning(f"Skipping duplicate tool call: {tc['name']} (count={tool_call_counts[tc['name']]})")
                         continue
 
                     logger.info(f"Tool call: {tc['name']}({tc.get('arguments', '')})")
